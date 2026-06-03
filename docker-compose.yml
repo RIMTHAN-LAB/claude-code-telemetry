@@ -1,35 +1,229 @@
-version: '3.8'
-
-# This is the standalone telemetry bridge configuration
-# For a complete setup with Langfuse included, use: ./scripts/setup-langfuse.sh
-#
-# For this standalone setup:
-# 1. Copy .env.example to .env and set your Langfuse credentials
-# 2. Run: docker compose up
-
 services:
-  telemetry-server:
-    build: .
-    ports:
-      - "${OTLP_RECEIVER_PORT:-4318}:${OTLP_RECEIVER_PORT:-4318}"
+  telemetry-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    depends_on:
+      langfuse-web:
+        condition: service_started
     environment:
-      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
-      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
-      - LANGFUSE_HOST=${LANGFUSE_HOST:-http://host.docker.internal:3000}
+      - SERVICE_FQDN_TELEMETRY-BRIDGE_4318=${SERVICE_FQDN_TELEMETRY_BRIDGE_4318:?https://otel.telemetry.rimthan.army}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:?}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_INIT_PROJECT_SECRET_KEY:?}
+      - LANGFUSE_HOST=http://langfuse-web:3000
+      - API_KEY=${OTEL_BRIDGE_API_KEY:?}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - NODE_ENV=${NODE_ENV:-production}
-      - OTLP_RECEIVER_PORT=${OTLP_RECEIVER_PORT:-4318}
-      # Always bind to 0.0.0.0 in Docker to accept external connections
+      - NODE_ENV=production
+      - OTLP_RECEIVER_PORT=4318
       - OTLP_RECEIVER_HOST=0.0.0.0
       - SESSION_TIMEOUT=${SESSION_TIMEOUT:-3600000}
       - MAX_REQUEST_SIZE=${MAX_REQUEST_SIZE:-10485760}
-      - API_KEY=${API_KEY:-}
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4318/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:4318/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
       interval: 30s
       timeout: 3s
       retries: 3
-      start_period: 5s
-    restart: unless-stopped
+      start_period: 10s
+
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3.178.0
+    restart: always
+    depends_on: &langfuse-depends-on
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment: &langfuse-worker-env
+      - NEXTAUTH_URL=https://langfuse.telemetry.rimthan.army
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:-postgres}
+      - SALT=${LANGFUSE_SALT:?}
+      - ENCRYPTION_KEY=${LANGFUSE_ENCRYPTION_KEY:?}
+      - TELEMETRY_ENABLED=${LANGFUSE_TELEMETRY_ENABLED:-false}
+      - LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES=${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES:-false}
+      - CLICKHOUSE_MIGRATION_URL=clickhouse://clickhouse:9000
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-clickhouse}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?}
+      - CLICKHOUSE_CLUSTER_ENABLED=false
+      - LANGFUSE_USE_AZURE_BLOB=false
+      - LANGFUSE_USE_OCI_NATIVE_OBJECT_STORAGE=false
+      - LANGFUSE_OCI_AUTH_TYPE=workload_identity
+      - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=${LANGFUSE_S3_BUCKET:-langfuse}
+      - LANGFUSE_S3_EVENT_UPLOAD_REGION=auto
+      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=${MINIO_ROOT_USER:?}
+      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:?}
+      - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://minio:9000
+      - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
+      - LANGFUSE_S3_EVENT_UPLOAD_PREFIX=events/
+      - LANGFUSE_S3_MEDIA_UPLOAD_BUCKET=${LANGFUSE_S3_BUCKET:-langfuse}
+      - LANGFUSE_S3_MEDIA_UPLOAD_REGION=auto
+      - LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID=${MINIO_ROOT_USER:?}
+      - LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:?}
+      - LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT=http://minio:9000
+      - LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE=true
+      - LANGFUSE_S3_MEDIA_UPLOAD_PREFIX=media/
+      - LANGFUSE_S3_BATCH_EXPORT_ENABLED=false
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_AUTH=${REDIS_AUTH:?}
+      - REDIS_TLS_ENABLED=false
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS:-}
+      - SMTP_CONNECTION_URL=${SMTP_CONNECTION_URL:-}
+
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:3.178.0
+    restart: always
+    depends_on: *langfuse-depends-on
+    environment:
+      - SERVICE_FQDN_LANGFUSE-WEB_3000=${SERVICE_FQDN_LANGFUSE_WEB_3000:?https://langfuse.telemetry.rimthan.army}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?}
+      - LANGFUSE_INIT_ORG_ID=${LANGFUSE_INIT_ORG_ID:?}
+      - LANGFUSE_INIT_ORG_NAME=${LANGFUSE_INIT_ORG_NAME:-Rimthan}
+      - LANGFUSE_INIT_PROJECT_ID=${LANGFUSE_INIT_PROJECT_ID:?}
+      - LANGFUSE_INIT_PROJECT_NAME=${LANGFUSE_INIT_PROJECT_NAME:-Claude Code OTEL}
+      - LANGFUSE_INIT_PROJECT_PUBLIC_KEY=${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:?}
+      - LANGFUSE_INIT_PROJECT_SECRET_KEY=${LANGFUSE_INIT_PROJECT_SECRET_KEY:?}
+      - LANGFUSE_INIT_USER_EMAIL=${LANGFUSE_INIT_USER_EMAIL:?}
+      - LANGFUSE_INIT_USER_NAME=${LANGFUSE_INIT_USER_NAME:-Rimthan Admin}
+      - LANGFUSE_INIT_USER_PASSWORD=${LANGFUSE_INIT_USER_PASSWORD:?}
+      - NEXTAUTH_URL=https://langfuse.telemetry.rimthan.army
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:-postgres}
+      - SALT=${LANGFUSE_SALT:?}
+      - ENCRYPTION_KEY=${LANGFUSE_ENCRYPTION_KEY:?}
+      - TELEMETRY_ENABLED=${LANGFUSE_TELEMETRY_ENABLED:-false}
+      - LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES=${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES:-false}
+      - CLICKHOUSE_MIGRATION_URL=clickhouse://clickhouse:9000
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-clickhouse}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?}
+      - CLICKHOUSE_CLUSTER_ENABLED=false
+      - LANGFUSE_USE_AZURE_BLOB=false
+      - LANGFUSE_USE_OCI_NATIVE_OBJECT_STORAGE=false
+      - LANGFUSE_OCI_AUTH_TYPE=workload_identity
+      - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=${LANGFUSE_S3_BUCKET:-langfuse}
+      - LANGFUSE_S3_EVENT_UPLOAD_REGION=auto
+      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=${MINIO_ROOT_USER:?}
+      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:?}
+      - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://minio:9000
+      - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
+      - LANGFUSE_S3_EVENT_UPLOAD_PREFIX=events/
+      - LANGFUSE_S3_MEDIA_UPLOAD_BUCKET=${LANGFUSE_S3_BUCKET:-langfuse}
+      - LANGFUSE_S3_MEDIA_UPLOAD_REGION=auto
+      - LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID=${MINIO_ROOT_USER:?}
+      - LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:?}
+      - LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT=http://minio:9000
+      - LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE=true
+      - LANGFUSE_S3_MEDIA_UPLOAD_PREFIX=media/
+      - LANGFUSE_S3_BATCH_EXPORT_ENABLED=false
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_AUTH=${REDIS_AUTH:?}
+      - REDIS_TLS_ENABLED=false
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS:-}
+      - SMTP_CONNECTION_URL=${SMTP_CONNECTION_URL:-}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "node -e \"fetch('http://127.0.0.1:3000/api/public/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:25.7
+    restart: always
+    user: "101:101"
+    environment:
+      - CLICKHOUSE_DB=default
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-clickhouse}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?}
     volumes:
-      - ./logs:/app/logs
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    restart: always
+    entrypoint: sh
+    command: -c 'mkdir -p /data/${LANGFUSE_S3_BUCKET:-langfuse} && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:?}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:?}
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - mc
+        - ready
+        - local
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: docker.io/redis:7-alpine
+    restart: always
+    command: >
+      --requirepass ${REDIS_AUTH:?}
+      --maxmemory-policy noeviction
+    volumes:
+      - langfuse_redis_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - -a
+        - ${REDIS_AUTH:?}
+        - ping
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  postgres:
+    image: docker.io/postgres:17-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+      - TZ=UTC
+      - PGTZ=UTC
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  langfuse_postgres_data:
+    driver: local
+  langfuse_clickhouse_data:
+    driver: local
+  langfuse_clickhouse_logs:
+    driver: local
+  langfuse_minio_data:
+    driver: local
+  langfuse_redis_data:
+    driver: local
