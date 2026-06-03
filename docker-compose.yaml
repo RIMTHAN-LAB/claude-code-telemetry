@@ -144,14 +144,6 @@ services:
       - REDIS_TLS_ENABLED=false
       - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS:-}
       - SMTP_CONNECTION_URL=${SMTP_CONNECTION_URL:-}
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - "node -e \"fetch('http://127.0.0.1:3000/api/public/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""
-      interval: 30s
-      timeout: 10s
-      retries: 10
-      start_period: 60s
     labels:
       - traefik.enable=true
       - traefik.http.middlewares.gzip.compress=true
