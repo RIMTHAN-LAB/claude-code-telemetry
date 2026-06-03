@@ -15,8 +15,6 @@ ClickHouse, Redis, and MinIO remain internal to the compose network.
 ## Required Coolify env
 
 ```dotenv
-SERVICE_FQDN_TELEMETRY_BRIDGE_4318=https://otel.telemetry.rimthan.army
-SERVICE_FQDN_LANGFUSE_WEB_3000=https://langfuse.telemetry.rimthan.army
 OTEL_BRIDGE_API_KEY=<secret>
 
 LANGFUSE_INIT_ORG_ID=<secret>

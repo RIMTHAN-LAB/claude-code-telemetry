@@ -8,7 +8,6 @@ services:
       langfuse-web:
         condition: service_started
     environment:
-      - SERVICE_FQDN_TELEMETRY-BRIDGE_4318=${SERVICE_FQDN_TELEMETRY_BRIDGE_4318:?https://otel.telemetry.rimthan.army}
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:?}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_INIT_PROJECT_SECRET_KEY:?}
       - LANGFUSE_HOST=http://langfuse-web:3000
@@ -29,6 +28,22 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
+    labels:
+      - traefik.enable=true
+      - traefik.http.middlewares.gzip.compress=true
+      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
+      - traefik.http.routers.ccotel-bridge-http.entryPoints=http
+      - traefik.http.routers.ccotel-bridge-http.middlewares=redirect-to-https
+      - traefik.http.routers.ccotel-bridge-http.rule=Host(`otel.telemetry.rimthan.army`)
+      - traefik.http.routers.ccotel-bridge-http.service=ccotel-bridge-http
+      - traefik.http.routers.ccotel-bridge-https.entryPoints=https
+      - traefik.http.routers.ccotel-bridge-https.middlewares=gzip
+      - traefik.http.routers.ccotel-bridge-https.rule=Host(`otel.telemetry.rimthan.army`)
+      - traefik.http.routers.ccotel-bridge-https.service=ccotel-bridge-https
+      - traefik.http.routers.ccotel-bridge-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.ccotel-bridge-https.tls=true
+      - traefik.http.services.ccotel-bridge-http.loadbalancer.server.port=4318
+      - traefik.http.services.ccotel-bridge-https.loadbalancer.server.port=4318
 
   langfuse-worker:
     image: docker.io/langfuse/langfuse-worker:3.178.0
@@ -84,7 +99,6 @@ services:
     restart: always
     depends_on: *langfuse-depends-on
     environment:
-      - SERVICE_FQDN_LANGFUSE-WEB_3000=${SERVICE_FQDN_LANGFUSE_WEB_3000:?https://langfuse.telemetry.rimthan.army}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?}
       - LANGFUSE_INIT_ORG_ID=${LANGFUSE_INIT_ORG_ID:?}
       - LANGFUSE_INIT_ORG_NAME=${LANGFUSE_INIT_ORG_NAME:-Rimthan}
@@ -138,6 +152,22 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
+    labels:
+      - traefik.enable=true
+      - traefik.http.middlewares.gzip.compress=true
+      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
+      - traefik.http.routers.ccotel-langfuse-http.entryPoints=http
+      - traefik.http.routers.ccotel-langfuse-http.middlewares=redirect-to-https
+      - traefik.http.routers.ccotel-langfuse-http.rule=Host(`langfuse.telemetry.rimthan.army`)
+      - traefik.http.routers.ccotel-langfuse-http.service=ccotel-langfuse-http
+      - traefik.http.routers.ccotel-langfuse-https.entryPoints=https
+      - traefik.http.routers.ccotel-langfuse-https.middlewares=gzip
+      - traefik.http.routers.ccotel-langfuse-https.rule=Host(`langfuse.telemetry.rimthan.army`)
+      - traefik.http.routers.ccotel-langfuse-https.service=ccotel-langfuse-https
+      - traefik.http.routers.ccotel-langfuse-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.ccotel-langfuse-https.tls=true
+      - traefik.http.services.ccotel-langfuse-http.loadbalancer.server.port=3000
+      - traefik.http.services.ccotel-langfuse-https.loadbalancer.server.port=3000
 
   clickhouse:
     image: docker.io/clickhouse/clickhouse-server:25.7
