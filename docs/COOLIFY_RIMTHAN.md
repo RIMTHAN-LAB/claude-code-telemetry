@@ -1,7 +1,7 @@
 # Rimthan Coolify deployment
 
 This fork is pinned for the Rimthan `claude-code-otel` pilot. The root
-`docker-compose.yml` is the Coolify deployment source of truth and intentionally
+`docker-compose.yaml` is the Coolify deployment source of truth and intentionally
 keeps all secrets in Coolify environment variables.
 
 ## Public endpoints
