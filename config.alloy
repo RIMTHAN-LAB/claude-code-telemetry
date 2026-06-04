@@ -87,10 +87,9 @@ otelcol.processor.transform "langfuse_semantics" {
 otelcol.processor.filter "drop_empty_native_generations" {
   error_mode = "ignore"
 
-  trace_conditions {
-    context = "span"
-    conditions = [
-      `span.name == "claude_code.llm_request" and span.attributes["langfuse.observation.input"] == nil and span.attributes["langfuse.observation.output"] == nil and (span.attributes["input_tokens"] == "null" or span.attributes["input_tokens"] == nil) and (span.attributes["output_tokens"] == "null" or span.attributes["output_tokens"] == nil)`,
+  traces {
+    span = [
+      `(name == "claude_code.llm_request" or attributes["span.type"] == "llm_request") and attributes["langfuse.observation.input"] == nil and attributes["langfuse.observation.output"] == nil and (attributes["input_tokens"] == "null" or attributes["input_tokens"] == nil) and (attributes["output_tokens"] == "null" or attributes["output_tokens"] == nil)`,
     ]
   }
 
