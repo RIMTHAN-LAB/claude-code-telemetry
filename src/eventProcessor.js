@@ -63,8 +63,7 @@ function processEvent(logRecord, resource, session) {
       return processToolDecision(attrs, standardAttrs, timestamp, session)
 
     default:
-      logger.debug({ eventName, attrs }, 'Unknown event')
-      return null
+      return processGenericEvent(eventName, attrs, standardAttrs, timestamp, session, logRecord)
   }
 }
 
@@ -315,6 +314,36 @@ function processToolDecision(attrs, standardAttrs, timestamp, session) {
   }
 }
 
+/**
+ * Preserve every Claude Code log event the bridge does not understand yet.
+ * Claude Code adds events over time; acknowledging but ignoring them makes the
+ * pipeline look healthy while losing audit data.
+ */
+function processGenericEvent(eventName, attrs, standardAttrs, timestamp, session, logRecord) {
+  const eventTimestamp = attrs['event.timestamp'] || standardAttrs.timestamp
+
+  logger.info({
+    sessionId: session.sessionId,
+    eventName,
+    attrKeys: Object.keys(attrs).sort(),
+  }, 'Generic Claude Code event preserved')
+
+  if (session.handleGenericEvent) {
+    session.handleGenericEvent(eventName, attrs, {
+      ...standardAttrs,
+      severityNumber: logRecord.severityNumber,
+      severityText: logRecord.severityText,
+    }, eventTimestamp)
+  }
+
+  return {
+    type: 'generic',
+    eventName,
+    attributes: attrs,
+    ...standardAttrs,
+  }
+}
+
 // Helper function to extract standard attributes
 function extractStandardAttributes(attrs) {
   return {
@@ -334,5 +363,6 @@ module.exports = {
   processApiError,
   processToolResult,
   processToolDecision,
+  processGenericEvent,
   extractStandardAttributes,
 }

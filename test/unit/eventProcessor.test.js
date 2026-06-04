@@ -50,6 +50,7 @@ describe('Event Processor', () => {
       handleApiError: jest.fn(),
       handleToolResult: jest.fn(),
       handleToolDecision: jest.fn(),
+      handleGenericEvent: jest.fn(),
     }
   })
 
@@ -133,18 +134,38 @@ describe('Event Processor', () => {
       expect(mockSession.handleApiRequest).toHaveBeenCalled()
     })
 
-    test('processes unknown event', () => {
+    test('preserves unknown Claude Code events', () => {
       const logRecord = {
-        body: { stringValue: 'unknown_event' },
+        body: { stringValue: 'claude_code.auth' },
         timeUnixNano: Date.now() * 1000000,
-        attributes: [],
+        attributes: [
+          { key: 'session.id', value: { stringValue: 'test-session-123' } },
+          { key: 'action', value: { stringValue: 'login' } },
+          { key: 'success', value: { boolValue: true } },
+        ],
       }
 
       const resource = {}
 
       const result = processEvent(logRecord, resource, mockSession)
 
-      expect(result).toBeNull()
+      expect(result).toEqual({
+        type: 'generic',
+        eventName: 'claude_code.auth',
+        attributes: {
+          'session.id': 'test-session-123',
+          action: 'login',
+          success: true,
+        },
+        sessionId: 'test-session-123',
+        organizationId: undefined,
+        userAccountUuid: undefined,
+        userEmail: undefined,
+        terminalType: undefined,
+        appVersion: undefined,
+        timestamp: expect.any(String),
+      })
+      expect(mockSession.handleGenericEvent).toHaveBeenCalled()
     })
 
     test('processes api error event', () => {

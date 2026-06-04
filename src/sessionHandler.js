@@ -143,6 +143,42 @@ class SessionHandler {
     })
   }
 
+  ensureTrace(attrs = {}, timestamp, reason = 'event') {
+    if (this.currentTrace) {
+      return this.currentTrace
+    }
+
+    this.conversationCount++
+    this.conversationStartTime = Date.now()
+    this.toolSequence = []
+
+    this.currentTrace = this.langfuse.trace({
+      name: `conversation-${this.conversationCount}`,
+      sessionId: attrs['session.id'] || this.sessionId,
+      userId: attrs['user.email'] || attrs['user.id'] || this.userEmail || this.metadata.userId,
+      input: {
+        prompt: attrs.prompt || attrs.user_prompt || '[No user prompt captured yet]',
+      },
+      metadata: {
+        conversationIndex: this.conversationCount,
+        startedFrom: reason,
+        promptId: attrs['prompt.id'] || attrs.prompt_id,
+        organizationId: attrs['organization.id'] || this.organizationId,
+        userAccountUuid: attrs['user.account_uuid'] || this.userAccountUuid,
+        userAccountId: attrs['user.account_id'] || this.userAccountId,
+        terminalType: attrs['terminal.type'] || this.terminalType,
+        entrypoint: attrs['app.entrypoint'],
+        claude: {
+          sessionId: attrs['session.id'] || this.sessionId,
+          version: attrs['app.version'] || this.metadata.service.version,
+        },
+      },
+      version: this.metadata.release,
+    })
+
+    return this.currentTrace
+  }
+
   handleApiRequest(attrs, timestamp) {
     const model = attrs.model || 'unknown'
     const inputTokens = parseInt(attrs.input_tokens || 0)
@@ -362,6 +398,68 @@ class SessionHandler {
         level: 'ERROR',
       })
     }
+  }
+
+  handleGenericEvent(eventName, attrs, standardAttrs = {}, timestamp) {
+    const trace = this.ensureTrace(attrs, timestamp, eventName)
+    const shortName = String(eventName || 'unknown_event').replace(/^claude_code\./, '')
+    const startTime = timestamp ? new Date(timestamp) : new Date()
+    const success = attrs.success
+    const isError = /error|failed|failure|retries_exhausted/.test(shortName) || success === false || success === 'false'
+    const level = isError ? 'ERROR' : 'DEFAULT'
+
+    const input = {}
+    const output = {}
+    const metadata = {
+      eventName,
+      eventTimestamp: attrs['event.timestamp'] || timestamp,
+      severityNumber: standardAttrs.severityNumber,
+      severityText: standardAttrs.severityText,
+      attributes: attrs,
+      organizationId: attrs['organization.id'] || standardAttrs.organizationId || this.organizationId,
+      userAccountUuid: attrs['user.account_uuid'] || standardAttrs.userAccountUuid || this.userAccountUuid,
+      userAccountId: attrs['user.account_id'] || this.userAccountId,
+      userEmail: attrs['user.email'] || standardAttrs.userEmail || this.userEmail,
+      terminalType: attrs['terminal.type'] || standardAttrs.terminalType || this.terminalType,
+    }
+
+    if (attrs.prompt || attrs.user_prompt) {
+      input.prompt = attrs.prompt || attrs.user_prompt
+    }
+    if (attrs.body || attrs.body_ref || attrs.body_length) {
+      input.body = attrs.body
+      input.bodyRef = attrs.body_ref
+      input.bodyLength = attrs.body_length
+    }
+    if (attrs.tool_input || attrs.tool_parameters || attrs.full_command) {
+      input.toolInput = attrs.tool_input
+      input.toolParameters = attrs.tool_parameters
+      input.fullCommand = attrs.full_command
+    }
+    if (attrs.tool_output || attrs.output || attrs.result) {
+      output.toolOutput = attrs.tool_output || attrs.output || attrs.result
+    }
+    if (attrs.error || attrs.error_message || attrs.error_category || attrs.error_code) {
+      output.error = attrs.error || attrs.error_message
+      output.errorCategory = attrs.error_category
+      output.errorCode = attrs.error_code
+    }
+    if (attrs.status || attrs.action || attrs.decision) {
+      output.status = attrs.status
+      output.action = attrs.action
+      output.decision = attrs.decision
+    }
+
+    this.langfuse.event({
+      name: `claude-${shortName}`,
+      traceId: trace.id,
+      startTime,
+      input: Object.keys(input).length > 0 ? input : undefined,
+      output: Object.keys(output).length > 0 ? output : undefined,
+      metadata,
+      level,
+      version: this.metadata.release,
+    })
   }
 
   processMetric(metric, dataPoint, attrs) {
