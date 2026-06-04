@@ -11,6 +11,8 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:?}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_INIT_PROJECT_SECRET_KEY:?}
       - LANGFUSE_HOST=http://langfuse-web:3000
+      - LANGFUSE_EMISSION_MODE=otel
+      - LANGFUSE_ENVIRONMENT=default
       - API_KEY=${OTEL_BRIDGE_API_KEY:?}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - NODE_ENV=production
