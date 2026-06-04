@@ -182,8 +182,8 @@ class LangfuseTestClient {
     // Get traces for session
     const traces = await this.getTraces(20, sessionId)
 
-    // Check for conversation trace
-    const conversationTrace = traces.find(t => t.name?.startsWith('conversation-'))
+    // Check for readable turn trace
+    const conversationTrace = traces.find(t => t.name === 'Claude Code turn')
     if (conversationTrace) {
       validation.conversationTrace = true
 

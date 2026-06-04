@@ -98,8 +98,8 @@ async function validateComprehensive() {
     validationResults.traces.found = traces.data?.length > 0
 
     if (traces.data?.length > 0) {
-      // Check for conversation traces
-      const conversationTrace = traces.data.find(t => t.name?.startsWith('conversation-'))
+      // Check for readable turn traces
+      const conversationTrace = traces.data.find(t => t.name === 'Claude Code turn')
       validationResults.traces.conversation = !!conversationTrace
 
       // Check for session-summary trace
@@ -107,12 +107,12 @@ async function validateComprehensive() {
       validationResults.traces.sessionSummary = !!summaryTrace
 
       console.log(`   ✅ Found ${traces.data.length} traces`)
-      console.log(`   ${conversationTrace ? '✅' : '❌'} Conversation traces`)
+      console.log(`   ${conversationTrace ? '✅' : '❌'} Claude Code turn traces`)
       console.log(`   ${summaryTrace ? '✅' : '❌'} Session summary trace`)
 
       // Analyze a conversation trace in detail
       if (conversationTrace) {
-        console.log(`\n3️⃣  Analyzing conversation trace: ${conversationTrace.name}`)
+        console.log(`\n3️⃣  Analyzing turn trace: ${conversationTrace.name}`)
         const traceDetails = await langfuseRequest(`/api/public/traces/${conversationTrace.id}`)
 
         // Check metadata

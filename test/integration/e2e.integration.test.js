@@ -129,9 +129,9 @@ describe('End-to-End Integration', () => {
     // Wait for telemetry to be processed
     await new Promise(resolve => setTimeout(resolve, 3000))
 
-    // Verify conversation trace was created
+    // Verify readable turn trace was created
     const trace = await langfuseClient.waitForTrace({
-      name: 'conversation-',
+      name: 'Claude Code turn',
     }, { timeout: 10000 })
 
     expect(trace).toBeDefined()
@@ -174,7 +174,7 @@ describe('End-to-End Integration', () => {
       // Find the conversation trace
       const traces = await langfuseClient.getTraces(20)
       const trace = traces.find(t =>
-        t.name?.startsWith('conversation-') &&
+        t.name === 'Claude Code turn' &&
         t.input?.prompt?.includes('hello.py'),
       )
 
@@ -185,7 +185,7 @@ describe('End-to-End Integration', () => {
 
       // Should have tool usage events (Write tool)
       const events = fullTrace.observations?.filter(o => o.type === 'EVENT') || []
-      const toolEvents = events.filter(e => e.name?.includes('tool-'))
+      const toolEvents = events.filter(e => e.name?.startsWith('Tool: '))
 
       expect(toolEvents.length).toBeGreaterThan(0)
 
@@ -247,7 +247,7 @@ describe('End-to-End Integration', () => {
     // Get recent traces
     const traces = await langfuseClient.getTraces(10)
     const conversationTrace = traces.find(t =>
-      t.name?.startsWith('conversation-') &&
+      t.name === 'Claude Code turn' &&
       t.input?.prompt?.includes('meaning of life'),
     )
 

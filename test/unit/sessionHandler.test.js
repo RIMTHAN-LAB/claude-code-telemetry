@@ -242,7 +242,7 @@ describe('SessionHandler', () => {
           seconds: 300.5,
           timestamp: expect.any(String),
         },
-        level: 'DEFAULT',
+        level: 'DEBUG',
       })
     })
 
@@ -323,7 +323,7 @@ describe('SessionHandler', () => {
   })
 
   describe('handleUserPrompt', () => {
-    test('creates a new trace for conversation', () => {
+    test('creates a readable turn trace for the prompt', () => {
       const attrs = {
         prompt: 'Hello, Claude!',
         prompt_length: 14,
@@ -335,14 +335,16 @@ describe('SessionHandler', () => {
 
       expect(session.conversationCount).toBe(1)
       expect(mockLangfuseInstance.trace).toHaveBeenCalledWith({
-        name: 'conversation-1',
+        name: 'Claude Code turn',
         sessionId: 'test-session-id',
         userId: 'test@example.com',
         input: {
           prompt: 'Hello, Claude!',
+          request: undefined,
           length: 14,
         },
         metadata: expect.objectContaining({
+          traceKind: 'turn',
           conversationIndex: 1,
         }),
         version: '1.0.0',
@@ -398,7 +400,7 @@ describe('SessionHandler', () => {
       })
       expect(session.langfuse.event).toHaveBeenCalledWith(
         expect.objectContaining({
-          name: 'tool-Bash',
+          name: 'Tool: Bash',
           traceId: 'test-trace-id',
           input: expect.objectContaining({
             toolName: 'Bash',
@@ -419,7 +421,7 @@ describe('SessionHandler', () => {
       expect(session.toolSequence[0].name).toBe('unknown')
       expect(session.langfuse.event).toHaveBeenCalledWith(
         expect.objectContaining({
-          name: 'tool-unknown',
+          name: 'Tool: unknown',
           traceId: 'test-trace-id',
           input: expect.objectContaining({
             toolName: 'unknown',
@@ -545,7 +547,7 @@ describe('SessionHandler', () => {
   })
 
   describe('handleGenericEvent', () => {
-    test('stores API request body as input and preserves the current prompt', () => {
+    test('stores raw API request as child event and updates readable trace input', () => {
       session.handleUserPrompt({
         prompt: 'Find the largest files',
         prompt_length: 22,
@@ -555,35 +557,49 @@ describe('SessionHandler', () => {
       const trace = session.currentTrace
 
       session.handleGenericEvent('claude_code.api_request_body', {
-        body: '{"messages":[{"role":"user","content":"Find the largest files"}]}',
-        body_length: 64,
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          messages: [{ role: 'user', content: 'Find the largest files' }],
+          tools: [{ name: 'Bash', input_schema: {} }],
+        }),
+        body_length: 151,
         body_truncated: false,
       }, {}, '2024-07-31T10:00:01Z')
 
       expect(mockLangfuseInstance.event).toHaveBeenCalledWith(expect.objectContaining({
-        name: 'claude-api_request_body',
+        name: 'Raw API request',
         traceId: 'test-trace-id',
         input: expect.objectContaining({
           body: expect.stringContaining('messages'),
-          bodyLength: 64,
+          bodyLength: 151,
           bodyTruncated: false,
         }),
         output: undefined,
+        metadata: expect.objectContaining({
+          rawBodyTruncated: false,
+          requestMatchStrategy: 'created',
+          request: expect.objectContaining({
+            model: 'claude-sonnet-4-20250514',
+            messageCount: 1,
+            toolCount: 1,
+            lastUserMessage: 'Find the largest files',
+          }),
+        }),
       }))
       expect(trace.update).toHaveBeenCalledWith({
         input: {
           prompt: 'Find the largest files',
-          apiRequestBody: {
-            body: expect.stringContaining('messages'),
-            bodyRef: undefined,
-            bodyLength: 64,
-            bodyTruncated: false,
-          },
+          request: expect.objectContaining({
+            model: 'claude-sonnet-4-20250514',
+            messageCount: 1,
+            toolCount: 1,
+            rawBodyTruncated: false,
+          }),
         },
       })
     })
 
-    test('stores API response body as output and updates trace output', () => {
+    test('stores raw API response as child event and updates readable trace output', () => {
       session.handleUserPrompt({
         prompt: 'Say hi',
         prompt_length: 6,
@@ -593,27 +609,145 @@ describe('SessionHandler', () => {
       const trace = session.currentTrace
 
       session.handleGenericEvent('claude_code.api_response_body', {
-        body: '{"role":"assistant","content":[{"type":"text","text":"hi"}]}',
-        body_length: 58,
+        body: JSON.stringify({
+          id: 'msg_123',
+          model: 'claude-sonnet-4-20250514',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'hi' }],
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 8, output_tokens: 2 },
+        }),
+        body_length: 164,
       }, {}, '2024-07-31T10:00:01Z')
 
       expect(mockLangfuseInstance.event).toHaveBeenCalledWith(expect.objectContaining({
-        name: 'claude-api_response_body',
+        name: 'Raw API response',
         traceId: 'test-trace-id',
         input: undefined,
         output: expect.objectContaining({
           body: expect.stringContaining('assistant'),
-          bodyLength: 58,
+          bodyLength: 164,
+        }),
+        metadata: expect.objectContaining({
+          requestMatchStrategy: 'created',
+          response: expect.objectContaining({
+            assistantText: 'hi',
+            stopReason: 'end_turn',
+            model: 'claude-sonnet-4-20250514',
+          }),
         }),
       }))
       expect(trace.update).toHaveBeenCalledWith({
         output: {
-          body: expect.stringContaining('assistant'),
-          bodyRef: undefined,
-          bodyLength: 58,
-          bodyTruncated: undefined,
+          assistantText: 'hi',
+          stopReason: 'end_turn',
+          model: 'claude-sonnet-4-20250514',
+          messageId: 'msg_123',
+          contentBlockTypes: ['text'],
         },
       })
+    })
+
+    test('does not create a turn trace for pre-prompt setup noise', () => {
+      session.handleGenericEvent('claude_code.mcp_server_connection', {
+        server_name: 'filesystem',
+      }, {}, '2024-07-31T10:00:00Z')
+
+      expect(session.currentTrace).toBeNull()
+      expect(mockLangfuseInstance.trace).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'Claude Code session events',
+        metadata: expect.objectContaining({
+          traceKind: 'session_events',
+        }),
+      }))
+      expect(mockLangfuseInstance.event).not.toHaveBeenCalled()
+    })
+
+    test('merges a later user prompt into a turn recovered from raw request body', () => {
+      session.handleGenericEvent('claude_code.api_request_body', {
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          messages: [{ role: 'user', content: 'Say hi' }],
+        }),
+        body_length: 99,
+      }, {}, '2024-07-31T10:00:00Z')
+
+      expect(session.conversationCount).toBe(1)
+
+      const trace = session.currentTrace
+      session.handleUserPrompt({
+        prompt: 'Say hi',
+        prompt_length: 6,
+        'user.email': 'test@example.com',
+      }, '2024-07-31T10:00:01Z')
+
+      expect(session.conversationCount).toBe(1)
+      expect(mockLangfuseInstance.trace).toHaveBeenCalledTimes(1)
+      expect(trace.update).toHaveBeenCalledWith(expect.objectContaining({
+        input: expect.objectContaining({
+          prompt: 'Say hi',
+          length: 6,
+          request: expect.objectContaining({
+            model: 'claude-sonnet-4-20250514',
+          }),
+        }),
+        metadata: expect.objectContaining({
+          traceKind: 'turn',
+          recoveredFrom: 'api_request_body',
+        }),
+      }))
+    })
+
+    test('merges out-of-order API request, response body, and request body into one generation', () => {
+      session.handleUserPrompt({
+        prompt: 'Say hi',
+        prompt_length: 6,
+        'user.email': 'test@example.com',
+      }, '2024-07-31T10:00:00Z')
+
+      session.handleGenericEvent('claude_code.api_response_body', {
+        body: JSON.stringify({
+          id: 'msg_123',
+          model: 'claude-sonnet-4-20250514',
+          content: [{ type: 'text', text: 'hi' }],
+          stop_reason: 'end_turn',
+        }),
+      }, {}, '2024-07-31T10:00:02Z')
+
+      session.handleApiRequest({
+        model: 'claude-sonnet-4-20250514',
+        input_tokens: 10,
+        output_tokens: 2,
+        cost: 0.01,
+      }, '2024-07-31T10:00:03Z')
+
+      session.handleGenericEvent('claude_code.api_request_body', {
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          messages: [{ role: 'user', content: 'Say hi' }],
+        }),
+      }, {}, '2024-07-31T10:00:04Z')
+
+      expect(session.pendingApiCalls).toHaveLength(1)
+      expect(mockLangfuseInstance.generation).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'LLM: claude-sonnet-4-20250514',
+        output: expect.objectContaining({
+          assistantText: 'hi',
+        }),
+      }))
+
+      const generation = mockLangfuseInstance.generation.mock.results[0].value
+      expect(generation.update).toHaveBeenCalledWith(expect.objectContaining({
+        input: expect.objectContaining({
+          request: expect.objectContaining({
+            model: 'claude-sonnet-4-20250514',
+            messageCount: 1,
+          }),
+        }),
+        output: expect.objectContaining({
+          assistantText: 'hi',
+        }),
+      }))
     })
   })
 

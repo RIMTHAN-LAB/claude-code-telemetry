@@ -26,9 +26,12 @@ function processEvent(logRecord, resource, session) {
     sessionId: attrs['session.id'] || session.sessionId,
     organizationId: attrs['organization.id'],
     userAccountUuid: attrs['user.account_uuid'],
+    userAccountId: attrs['user.account_id'],
     userEmail: attrs['user.email'],
     terminalType: attrs['terminal.type'],
     appVersion: attrs['app.version'],
+    promptId: attrs['prompt.id'] || attrs.prompt_id || attrs.promptId,
+    requestId: attrs.request_id || attrs['request.id'] || attrs.client_request_id,
     timestamp: new Date(timestamp).toISOString(),
   }
 
@@ -91,8 +94,10 @@ function processUserPrompt(attrs, standardAttrs, timestamp, session) {
     'session.id': standardAttrs.sessionId,
     'organization.id': standardAttrs.organizationId,
     'user.account_uuid': standardAttrs.userAccountUuid,
+    'user.account_id': standardAttrs.userAccountId,
     'terminal.type': standardAttrs.terminalType,
     'app.version': standardAttrs.appVersion,
+    'prompt.id': standardAttrs.promptId,
   }, eventTimestamp)
 
   logger.info({
@@ -133,6 +138,7 @@ function processApiRequest(attrs, standardAttrs, timestamp, session) {
   const costUsd = parseFloat(attrs.cost_usd || attrs.cost || attrs['cost.usd'] || '0')
   const durationMs = parseInt(attrs.duration_ms || attrs.duration || '0', 10)
   const requestId = attrs.request_id || attrs['request.id']
+  const clientRequestId = attrs.client_request_id
   const eventTimestamp = attrs['event.timestamp'] || standardAttrs.timestamp
 
   // Pass all attributes to session handler
@@ -146,7 +152,9 @@ function processApiRequest(attrs, standardAttrs, timestamp, session) {
     duration_ms: durationMs,
     'api.response_time': durationMs,
     request_id: requestId,
+    client_request_id: clientRequestId,
     'event.timestamp': eventTimestamp,
+    'prompt.id': standardAttrs.promptId,
     ...standardAttrs,
   }, eventTimestamp)
 
@@ -160,6 +168,7 @@ function processApiRequest(attrs, standardAttrs, timestamp, session) {
     costUsd,
     durationMs,
     requestId,
+    clientRequestId,
   }, 'API request processed')
 
   return {
@@ -172,6 +181,7 @@ function processApiRequest(attrs, standardAttrs, timestamp, session) {
     costUsd,
     durationMs,
     requestId,
+    clientRequestId,
     ...standardAttrs,
   }
 }
@@ -231,7 +241,7 @@ function processApiError(attrs, standardAttrs, timestamp, session) {
  */
 function processToolResult(attrs, standardAttrs, timestamp, session) {
   const toolName = attrs.tool_name || attrs.tool || attrs.name || 'unknown'
-  const success = attrs.success === 'true' || attrs.success === true
+  const success = attrs.success == null ? true : (attrs.success === true || String(attrs.success).toLowerCase() === 'true')
   const durationMs = parseInt(attrs.duration_ms || attrs.duration || '0', 10)
   const eventTimestamp = attrs['event.timestamp'] || standardAttrs.timestamp
 
@@ -239,6 +249,14 @@ function processToolResult(attrs, standardAttrs, timestamp, session) {
     tool_name: toolName,
     success,
     duration_ms: durationMs,
+    decision: attrs.decision,
+    source: attrs.source,
+    tool_input: attrs.tool_input,
+    tool_parameters: attrs.tool_parameters,
+    full_command: attrs.full_command,
+    tool_output: attrs.tool_output,
+    output: attrs.output,
+    result: attrs.result,
     'event.timestamp': eventTimestamp,
     ...standardAttrs,
   }, eventTimestamp)
@@ -350,9 +368,12 @@ function extractStandardAttributes(attrs) {
     sessionId: attrs['session.id'],
     organizationId: attrs['organization.id'],
     userAccountUuid: attrs['user.account_uuid'],
+    userAccountId: attrs['user.account_id'],
     userEmail: attrs['user.email'],
     terminalType: attrs['terminal.type'],
     appVersion: attrs['app.version'],
+    promptId: attrs['prompt.id'] || attrs.prompt_id || attrs.promptId,
+    requestId: attrs.request_id || attrs['request.id'] || attrs.client_request_id,
   }
 }
 

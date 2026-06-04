@@ -1,6 +1,14 @@
 // Session Handler class extracted for better testability
 // const { Langfuse } = require('langfuse') // Imported but not used directly in this file
 const pino = require('pino')
+const {
+  parseAnthropicRequestBody,
+  parseAnthropicResponseBody,
+  publicRequestSummary,
+  publicResponseSummary,
+  rawBodyPayload,
+  rawBodyMetadata,
+} = require('./anthropicBodyParser')
 
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
@@ -35,6 +43,10 @@ class SessionHandler {
     this.currentTrace = null
     this.currentSpan = null
     this.currentPrompt = null
+    this.currentTurn = null
+    this.sessionEventsTrace = null
+    this.pendingApiCalls = []
+    this.sessionSetupEventCounts = {}
     this.toolSequence = []
     this.conversationStartTime = null
 
@@ -84,6 +96,231 @@ class SessionHandler {
     }
   }
 
+  getPromptId(attrs = {}) {
+    return attrs['prompt.id'] || attrs.prompt_id || attrs.promptId
+  }
+
+  getUserId(attrs = {}) {
+    return attrs['user.email'] || attrs['user.id'] || this.userEmail || this.metadata.userId
+  }
+
+  turnMetadata(attrs = {}, timestamp, startedFrom = 'user_prompt') {
+    const promptId = this.getPromptId(attrs)
+    return {
+      traceKind: 'turn',
+      promptId,
+      conversationIndex: this.conversationCount,
+      sessionId: attrs['session.id'] || this.sessionId,
+      userEmail: attrs['user.email'] || this.userEmail,
+      organizationId: attrs['organization.id'] || this.organizationId,
+      userAccountUuid: attrs['user.account_uuid'] || this.userAccountUuid,
+      userAccountId: attrs['user.account_id'] || this.userAccountId,
+      terminalType: attrs['terminal.type'] || this.terminalType,
+      appVersion: attrs['app.version'] || this.metadata.service.version,
+      startedFrom,
+      promptTimestamp: attrs['event.timestamp'] || timestamp,
+      claude: {
+        sessionId: attrs['session.id'] || this.sessionId,
+        version: attrs['app.version'] || this.metadata.service.version,
+      },
+    }
+  }
+
+  createTurnTrace({ prompt, promptLength = 0, attrs = {}, timestamp, startedFrom = 'user_prompt', requestSummary }) {
+    this.conversationCount++
+    this.conversationStartTime = Date.now()
+    this.currentPrompt = prompt || this.currentPrompt || '[No user prompt captured yet]'
+    this.currentSpan = null
+    this.toolSequence = []
+
+    const input = {
+      prompt: this.currentPrompt,
+      request: requestSummary ? publicRequestSummary(requestSummary) : undefined,
+      length: promptLength || undefined,
+    }
+
+    this.currentTrace = this.langfuse.trace({
+      name: 'Claude Code turn',
+      sessionId: attrs['session.id'] || this.sessionId,
+      userId: this.getUserId(attrs),
+      input,
+      metadata: this.turnMetadata(attrs, timestamp, startedFrom),
+      version: this.metadata.release,
+    })
+
+    this.currentTurn = {
+      trace: this.currentTrace,
+      prompt: this.currentPrompt,
+      promptId: this.getPromptId(attrs),
+      startedFrom,
+      input,
+      output: undefined,
+      apiCalls: [],
+    }
+
+    return this.currentTrace
+  }
+
+  getOrCreateSessionEventsTrace(attrs = {}, timestamp) {
+    if (this.sessionEventsTrace) {
+      return this.sessionEventsTrace
+    }
+
+    this.sessionEventsTrace = this.langfuse.trace({
+      name: 'Claude Code session events',
+      sessionId: attrs['session.id'] || this.sessionId,
+      userId: this.getUserId(attrs),
+      input: {
+        sessionStart: this.createdAt.toISOString(),
+      },
+      metadata: {
+        traceKind: 'session_events',
+        sessionId: attrs['session.id'] || this.sessionId,
+        userEmail: attrs['user.email'] || this.userEmail,
+        organizationId: attrs['organization.id'] || this.organizationId,
+        userAccountUuid: attrs['user.account_uuid'] || this.userAccountUuid,
+        terminalType: attrs['terminal.type'] || this.terminalType,
+        appVersion: attrs['app.version'] || this.metadata.service.version,
+        firstEventAt: timestamp,
+      },
+      version: this.metadata.release,
+    })
+
+    return this.sessionEventsTrace
+  }
+
+  isSetupNoiseEvent(shortName) {
+    return /^(mcp_server_connection|hook_registered|plugin_loaded|auth|session_start|active_time|active-time|hook_plugin_metrics)$/.test(shortName) ||
+      /^hook_/.test(shortName)
+  }
+
+  recordSessionSetupEvent(shortName, attrs = {}, timestamp) {
+    const trace = this.getOrCreateSessionEventsTrace(attrs, timestamp)
+    this.sessionSetupEventCounts[shortName] = (this.sessionSetupEventCounts[shortName] || 0) + 1
+
+    if (trace.update) {
+      trace.update({
+        output: {
+          setupEventCounts: this.sessionSetupEventCounts,
+          lastEventName: shortName,
+          lastEventAt: timestamp,
+        },
+      })
+    }
+
+    return trace
+  }
+
+  eventTimeMs(timestamp) {
+    const parsed = timestamp ? new Date(timestamp).getTime() : NaN
+    return Number.isFinite(parsed) ? parsed : Date.now()
+  }
+
+  findOrCreatePendingApiCall({ attrs = {}, model, timestamp, create = true }) {
+    const traceId = this.currentTrace?.id
+    const requestId = attrs.request_id || attrs['request.id'] || attrs.client_request_id
+    const callModel = model || attrs.model
+    const nowMs = this.eventTimeMs(timestamp)
+
+    let call
+    let matchStrategy = 'created'
+
+    if (requestId) {
+      call = [...this.pendingApiCalls].reverse().find((candidate) =>
+        candidate.traceId === traceId && candidate.requestId === requestId)
+      if (call) matchStrategy = 'request_id'
+    }
+
+    if (!call && callModel) {
+      call = [...this.pendingApiCalls].reverse().find((candidate) =>
+        candidate.traceId === traceId &&
+        candidate.model === callModel &&
+        Math.abs(nowMs - candidate.updatedAtMs) <= 10000)
+      if (call) matchStrategy = 'model_time_window'
+    }
+
+    if (!call && create) {
+      call = {
+        id: `${traceId || this.sessionId}-${this.pendingApiCalls.length + 1}`,
+        traceId,
+        requestId,
+        model: callModel,
+        createdAtMs: nowMs,
+        updatedAtMs: nowMs,
+        requestSummary: undefined,
+        responseSummary: undefined,
+        generation: undefined,
+      }
+      this.pendingApiCalls.push(call)
+      if (this.currentTurn) {
+        this.currentTurn.apiCalls.push(call)
+      }
+    } else if (call) {
+      call.updatedAtMs = nowMs
+      if (requestId && !call.requestId) call.requestId = requestId
+      if (callModel && !call.model) call.model = callModel
+    }
+
+    return { call, matchStrategy }
+  }
+
+  updateTurnInputFromApiCall(call) {
+    if (!this.currentTurn || !this.currentTrace || !call?.requestSummary) return
+
+    this.currentTurn.input = {
+      prompt: this.currentTurn.prompt,
+      request: publicRequestSummary(call.requestSummary),
+    }
+
+    if (this.currentTrace.update) {
+      this.currentTrace.update({ input: this.currentTurn.input })
+    }
+  }
+
+  updateTurnOutputFromApiCall(call) {
+    if (!this.currentTurn || !this.currentTrace || !call?.responseSummary) return
+
+    const response = publicResponseSummary(call.responseSummary)
+    this.currentTurn.output = {
+      assistantText: response.assistantText,
+      stopReason: response.stopReason,
+      model: response.model,
+      messageId: response.messageId,
+      contentBlockTypes: response.contentBlockTypes,
+    }
+
+    if (this.currentTrace.update) {
+      const update = { output: this.currentTurn.output }
+      if (this.currentTurn.input?.request) update.input = this.currentTurn.input
+      this.currentTrace.update(update)
+    }
+  }
+
+  generationInput(call, model) {
+    return {
+      prompt: this.currentTurn?.prompt || this.currentPrompt,
+      request: call?.requestSummary ? publicRequestSummary(call.requestSummary) : { model },
+    }
+  }
+
+  generationOutput(call) {
+    if (!call?.responseSummary) return undefined
+    return publicResponseSummary(call.responseSummary)
+  }
+
+  updateGenerationFromApiCall(call) {
+    if (!call?.generation?.update) return
+
+    const update = {}
+    if (call.requestSummary) update.input = this.generationInput(call, call.model)
+    if (call.responseSummary) update.output = this.generationOutput(call)
+    if (call.usage) update.usage = call.usage
+
+    if (Object.keys(update).length > 0) {
+      call.generation.update(update)
+    }
+  }
+
   processLogRecord(logRecord, resource) {
     const eventName = logRecord.body?.stringValue
     const timestamp = logRecord.timeUnixNano ? new Date(Number(logRecord.timeUnixNano) / 1000000).toISOString() : new Date().toISOString()
@@ -111,39 +348,53 @@ class SessionHandler {
 
   handleUserPrompt(attrs, timestamp) {
     const prompt = attrs.prompt || '[Prompt hidden]'
-    this.currentPrompt = prompt
+    const promptId = this.getPromptId(attrs)
+
+    if (this.currentTurn && this.currentTrace && this.currentTurn.startedFrom !== 'user_prompt') {
+      const samePrompt = this.currentTurn.prompt === prompt
+      const samePromptId = promptId && this.currentTurn.promptId === promptId
+
+      if (samePrompt || samePromptId) {
+        const previousStart = this.currentTurn.startedFrom
+        this.currentPrompt = prompt
+        this.currentTurn.prompt = prompt
+        this.currentTurn.promptId = promptId || this.currentTurn.promptId
+        this.currentTurn.startedFrom = 'user_prompt'
+        this.currentTurn.input = {
+          ...this.currentTurn.input,
+          prompt,
+          length: attrs.prompt_length || undefined,
+        }
+
+        if (this.currentTrace.update) {
+          this.currentTrace.update({
+            input: this.currentTurn.input,
+            metadata: {
+              ...this.turnMetadata(attrs, timestamp, 'user_prompt'),
+              recoveredFrom: previousStart,
+            },
+          })
+        }
+
+        logger.info(
+          { sessionId: this.sessionId, promptLength: attrs.prompt_length || 0, recoveredFrom: previousStart },
+          'User prompt merged into recovered turn',
+        )
+        return
+      }
+    }
 
     logger.info(
       { sessionId: this.sessionId, promptLength: attrs.prompt_length || 0 },
       'User prompt received',
     )
 
-    this.conversationCount++
-    this.conversationStartTime = Date.now()
-    this.toolSequence = []
-
-    // Create a new trace for this conversation
-    this.currentTrace = this.langfuse.trace({
-      name: `conversation-${this.conversationCount}`,
-      sessionId: this.sessionId,
-      userId: attrs['user.email'] || attrs['user.id'] || this.metadata.userId,
-      input: {
-        prompt,
-        length: attrs.prompt_length || 0,
-      },
-      metadata: {
-        promptId: attrs.prompt_id,
-        promptTimestamp: attrs['event.timestamp'] || timestamp,
-        conversationIndex: this.conversationCount,
-        organizationId: attrs['organization.id'] || this.organizationId,
-        userAccountUuid: attrs['user.account_uuid'] || this.userAccountUuid,
-        terminalType: attrs['terminal.type'] || this.terminalType,
-        claude: {
-          sessionId: attrs['session.id'] || this.sessionId,
-          version: attrs['app.version'] || this.metadata.service.version,
-        },
-      },
-      version: this.metadata.release,
+    this.createTurnTrace({
+      prompt,
+      promptLength: attrs.prompt_length || 0,
+      attrs,
+      timestamp,
+      startedFrom: 'user_prompt',
     })
   }
 
@@ -152,36 +403,17 @@ class SessionHandler {
       return this.currentTrace
     }
 
-    this.conversationCount++
-    this.conversationStartTime = Date.now()
-    this.toolSequence = []
-    this.currentPrompt = attrs.prompt || attrs.user_prompt || this.currentPrompt
+    const prompt = attrs.prompt || attrs.user_prompt || this.currentPrompt
+    if (!prompt && !this.getPromptId(attrs)) {
+      return this.getOrCreateSessionEventsTrace(attrs, timestamp)
+    }
 
-    this.currentTrace = this.langfuse.trace({
-      name: `conversation-${this.conversationCount}`,
-      sessionId: attrs['session.id'] || this.sessionId,
-      userId: attrs['user.email'] || attrs['user.id'] || this.userEmail || this.metadata.userId,
-      input: {
-        prompt: this.currentPrompt || '[No user prompt captured yet]',
-      },
-      metadata: {
-        conversationIndex: this.conversationCount,
-        startedFrom: reason,
-        promptId: attrs['prompt.id'] || attrs.prompt_id,
-        organizationId: attrs['organization.id'] || this.organizationId,
-        userAccountUuid: attrs['user.account_uuid'] || this.userAccountUuid,
-        userAccountId: attrs['user.account_id'] || this.userAccountId,
-        terminalType: attrs['terminal.type'] || this.terminalType,
-        entrypoint: attrs['app.entrypoint'],
-        claude: {
-          sessionId: attrs['session.id'] || this.sessionId,
-          version: attrs['app.version'] || this.metadata.service.version,
-        },
-      },
-      version: this.metadata.release,
+    return this.createTurnTrace({
+      prompt: prompt || '[No user prompt captured yet]',
+      attrs,
+      timestamp,
+      startedFrom: reason,
     })
-
-    return this.currentTrace
   }
 
   handleApiRequest(attrs, timestamp) {
@@ -203,37 +435,54 @@ class SessionHandler {
     this.totalTokens += totalTokens
     this.apiCallCount++
 
-    // If no trace exists yet (no user_prompt event), create one now
-    if (!this.currentTrace && this.apiCallCount === 1) {
-      this.conversationCount++
-      this.conversationStartTime = Date.now()
-      this.currentTrace = this.langfuse.trace({
-        name: `conversation-${this.conversationCount}`,
-        sessionId: this.sessionId,
-        userId: attrs['user.email'] || this.userEmail || this.metadata.userId,
-        input: {
-          prompt: '[No user prompt captured - OTEL_LOG_USER_PROMPTS may be disabled]',
-          model,
-          firstApiCall: true,
-        },
-        metadata: {
-          conversationIndex: this.conversationCount,
+    if (!this.currentTrace) {
+      const prompt = attrs.prompt || attrs.user_prompt || this.currentPrompt
+      if (prompt || this.getPromptId(attrs)) {
+        this.createTurnTrace({
+          prompt: prompt || '[No user prompt captured yet]',
+          attrs,
+          timestamp,
           startedFrom: 'api_request',
-          organizationId: attrs['organization.id'] || this.organizationId,
-          userAccountUuid: attrs['user.account_uuid'] || this.userAccountUuid,
-          terminalType: attrs['terminal.type'] || this.terminalType,
-          claude: {
-            sessionId: attrs['session.id'] || this.sessionId,
-            version: this.metadata.service.version,
-            appVersion: attrs['app.version'] || this.metadata.service.version,
+        })
+      } else {
+        const trace = this.getOrCreateSessionEventsTrace(attrs, timestamp)
+        this.langfuse.event({
+          name: 'API request before prompt',
+          traceId: trace.id,
+          startTime,
+          input: { model },
+          output: {
+            inputTokens,
+            outputTokens,
+            totalTokens,
+            cost,
+            durationMs,
           },
-        },
-        version: this.metadata.release,
-      })
+          metadata: {
+            traceKind: 'session_events',
+            requestId,
+            cacheReadTokens,
+            cacheCreationTokens,
+          },
+          level: 'DEBUG',
+          version: this.metadata.release,
+        })
+        return
+      }
     }
 
     // Create generation span
     const modelType = model.includes('haiku') ? 'routing' : 'generation'
+    const { call } = this.findOrCreatePendingApiCall({ attrs, model, timestamp })
+    call.model = model
+    call.requestId = requestId || call.requestId
+    call.usage = {
+      input: inputTokens,
+      output: outputTokens,
+      total: totalTokens,
+      unit: 'TOKENS',
+    }
+    call.cost = cost
 
     logger.debug({
       sessionId: this.sessionId,
@@ -245,20 +494,16 @@ class SessionHandler {
     }, 'Creating generation observation')
 
     const span = this.langfuse.generation({
-      name: `${modelType}-${model}`,
+      name: modelType === 'routing' ? `Routing: ${model}` : `LLM: ${model}`,
       traceId: this.currentTrace?.id, // Use traceId, not parentObservationId
       startTime,
       endTime,
       model,
-      input: attrs.input || `[${modelType} request]`,
-      output: attrs.output || attrs.response || `[${modelType} response]`,
-      usage: {
-        input: inputTokens,
-        output: outputTokens,
-        total: totalTokens,
-        unit: 'TOKENS',
-      },
+      input: this.generationInput(call, model),
+      output: this.generationOutput(call),
+      usage: call.usage,
       metadata: {
+        observationKind: modelType,
         cost,
         requestId,
         cache: {
@@ -284,6 +529,11 @@ class SessionHandler {
       statusMessage: attrs.status_message || `${modelType} completed`,
       version: this.metadata.release,
     })
+
+    call.generation = span
+    this.updateGenerationFromApiCall(call)
+    this.updateTurnInputFromApiCall(call)
+    this.updateTurnOutputFromApiCall(call)
 
     logger.debug({
       sessionId: this.sessionId,
@@ -316,7 +566,7 @@ class SessionHandler {
 
   handleToolResult(attrs, timestamp) {
     const toolName = attrs.tool_name || attrs.tool || attrs.name || 'unknown'
-    const success = attrs.success !== false
+    const success = attrs.success == null ? true : !(attrs.success === false || attrs.success === 'false')
     const durationMs = parseInt(attrs.duration_ms || attrs.duration || '0', 10)
     const decision = attrs.decision || 'execute'
     const source = attrs.source || 'automated'
@@ -335,7 +585,7 @@ class SessionHandler {
     // Create event
     if (this.currentTrace) {
       this.langfuse.event({
-        name: `tool-${toolName}`,
+        name: `Tool: ${toolName}`,
         traceId: this.currentTrace.id,
         parentObservationId: this.currentSpan?.id, // Link to current generation if exists
         startTime,
@@ -343,12 +593,17 @@ class SessionHandler {
           toolName,
           decision,
           source,
+          toolInput: attrs.tool_input,
+          toolParameters: attrs.tool_parameters,
+          fullCommand: attrs.full_command,
         },
         output: {
           success,
           durationMs,
+          toolOutput: attrs.tool_output || attrs.output || attrs.result,
         },
         metadata: {
+          traceKind: 'turn',
           eventTimestamp: attrs['event.timestamp'] || timestamp,
           toolIndex: this.toolCallCount,
           decision: {
@@ -406,18 +661,44 @@ class SessionHandler {
   }
 
   handleGenericEvent(eventName, attrs, standardAttrs = {}, timestamp) {
-    const trace = this.ensureTrace(attrs, timestamp, eventName)
     const shortName = String(eventName || 'unknown_event').replace(/^claude_code\./, '')
     const startTime = timestamp ? new Date(timestamp) : new Date()
     const success = attrs.success
     const isError = /error|failed|failure|retries_exhausted/.test(shortName) || success === false || success === 'false'
-    const level = isError ? 'ERROR' : 'DEFAULT'
+    const isSetupNoise = this.isSetupNoiseEvent(shortName)
+    const level = isError ? 'ERROR' : (isSetupNoise ? 'DEBUG' : 'DEFAULT')
     const isApiRequestBody = /api_request_body/.test(shortName)
     const isApiResponseBody = /api_response_body/.test(shortName)
+    const parsedRequest = isApiRequestBody ? parseAnthropicRequestBody(attrs.body, attrs) : undefined
+    const parsedResponse = isApiResponseBody ? parseAnthropicResponseBody(attrs.body, attrs) : undefined
+
+    let trace = this.currentTrace
+
+    if (!trace) {
+      const recoveredPrompt = parsedRequest?.summary?.lastUserMessage || attrs.prompt || attrs.user_prompt
+
+      if (recoveredPrompt || this.getPromptId(attrs)) {
+        trace = this.createTurnTrace({
+          prompt: recoveredPrompt || '[No user prompt captured yet]',
+          attrs,
+          timestamp,
+          startedFrom: isApiRequestBody ? 'api_request_body' : eventName,
+          requestSummary: parsedRequest?.summary,
+        })
+      } else if (isSetupNoise) {
+        this.recordSessionSetupEvent(shortName, attrs, timestamp)
+        return
+      } else {
+        trace = this.getOrCreateSessionEventsTrace(attrs, timestamp)
+      }
+    }
+
+    const isTurnTrace = trace === this.currentTrace
 
     const input = {}
     const output = {}
     const metadata = {
+      traceKind: isTurnTrace ? 'turn' : 'session_events',
       eventName,
       eventTimestamp: attrs['event.timestamp'] || timestamp,
       severityNumber: standardAttrs.severityNumber,
@@ -428,6 +709,88 @@ class SessionHandler {
       userAccountId: attrs['user.account_id'] || this.userAccountId,
       userEmail: attrs['user.email'] || standardAttrs.userEmail || this.userEmail,
       terminalType: attrs['terminal.type'] || standardAttrs.terminalType || this.terminalType,
+    }
+
+    if (isApiRequestBody) {
+      const { call, matchStrategy } = isTurnTrace
+        ? this.findOrCreatePendingApiCall({
+          attrs,
+          model: parsedRequest.summary?.model,
+          timestamp,
+        })
+        : { call: undefined, matchStrategy: 'session_events' }
+
+      if (call) {
+        call.requestSummary = parsedRequest.summary
+        if (parsedRequest.summary?.model && !call.model) call.model = parsedRequest.summary.model
+        this.updateTurnInputFromApiCall(call)
+        this.updateGenerationFromApiCall(call)
+      }
+
+      this.langfuse.event({
+        name: 'Raw API request',
+        traceId: trace.id,
+        startTime,
+        input: rawBodyPayload(attrs),
+        output: undefined,
+        metadata: {
+          ...metadata,
+          ...rawBodyMetadata(attrs),
+          request: publicRequestSummary(parsedRequest.summary),
+          requestMatchStrategy: matchStrategy,
+          parseStatus: parsedRequest.parseStatus,
+          parseError: parsedRequest.parseError,
+        },
+        level,
+        version: this.metadata.release,
+      })
+      return
+    }
+
+    if (isApiResponseBody) {
+      const { call, matchStrategy } = isTurnTrace
+        ? this.findOrCreatePendingApiCall({
+          attrs,
+          model: parsedResponse.summary?.model,
+          timestamp,
+        })
+        : { call: undefined, matchStrategy: 'session_events' }
+
+      if (call) {
+        call.responseSummary = parsedResponse.summary
+        if (parsedResponse.summary?.model && !call.model) call.model = parsedResponse.summary.model
+        if (parsedResponse.summary?.usage) {
+          const inputTokens = parsedResponse.summary.usage.input || 0
+          const outputTokens = parsedResponse.summary.usage.output || 0
+          call.usage = {
+            input: inputTokens,
+            output: outputTokens,
+            total: inputTokens + outputTokens,
+            unit: 'TOKENS',
+          }
+        }
+        this.updateTurnOutputFromApiCall(call)
+        this.updateGenerationFromApiCall(call)
+      }
+
+      this.langfuse.event({
+        name: 'Raw API response',
+        traceId: trace.id,
+        startTime,
+        input: undefined,
+        output: rawBodyPayload(attrs),
+        metadata: {
+          ...metadata,
+          ...rawBodyMetadata(attrs),
+          response: publicResponseSummary(parsedResponse.summary),
+          requestMatchStrategy: matchStrategy,
+          parseStatus: parsedResponse.parseStatus,
+          parseError: parsedResponse.parseError,
+        },
+        level,
+        version: this.metadata.release,
+      })
+      return
     }
 
     if (attrs.prompt || attrs.user_prompt) {
@@ -441,32 +804,10 @@ class SessionHandler {
         bodyTruncated: attrs.body_truncated,
       }
 
-      if (isApiResponseBody) {
-        output.body = bodyPayload.body
-        output.bodyRef = bodyPayload.bodyRef
-        output.bodyLength = bodyPayload.bodyLength
-        output.bodyTruncated = bodyPayload.bodyTruncated
-
-        if (trace.update) {
-          trace.update({
-            output: bodyPayload,
-          })
-        }
-      } else {
-        input.body = bodyPayload.body
-        input.bodyRef = bodyPayload.bodyRef
-        input.bodyLength = bodyPayload.bodyLength
-        input.bodyTruncated = bodyPayload.bodyTruncated
-
-        if (isApiRequestBody && trace.update) {
-          trace.update({
-            input: {
-              prompt: this.currentPrompt || attrs.prompt || attrs.user_prompt || '[No user prompt captured yet]',
-              apiRequestBody: bodyPayload,
-            },
-          })
-        }
-      }
+      input.body = bodyPayload.body
+      input.bodyRef = bodyPayload.bodyRef
+      input.bodyLength = bodyPayload.bodyLength
+      input.bodyTruncated = bodyPayload.bodyTruncated
     }
     if (attrs.tool_input || attrs.tool_parameters || attrs.full_command) {
       input.toolInput = attrs.tool_input
@@ -488,7 +829,7 @@ class SessionHandler {
     }
 
     this.langfuse.event({
-      name: `claude-${shortName}`,
+      name: isSetupNoise ? `Session: ${shortName}` : `Claude: ${shortName}`,
       traceId: trace.id,
       startTime,
       input: Object.keys(input).length > 0 ? input : undefined,
@@ -693,7 +1034,7 @@ class SessionHandler {
               seconds: activeTime,
               timestamp: new Date().toISOString(),
             },
-            level: 'DEFAULT',
+            level: 'DEBUG',
           })
         }
         break
@@ -725,14 +1066,21 @@ class SessionHandler {
 
       // Close current trace if exists
       if (this.currentTrace) {
-        this.currentTrace.update({
-          output: {
-            status: 'session_ended',
-            duration: this.conversationStartTime ? Date.now() - this.conversationStartTime : 0,
-          },
-        })
+        const duration = this.conversationStartTime ? Date.now() - this.conversationStartTime : 0
+        const existingOutput = this.currentTurn?.output && typeof this.currentTurn.output === 'object'
+          ? this.currentTurn.output
+          : {}
+        const finalOutput = {
+          ...existingOutput,
+          status: 'session_ended',
+          duration,
+        }
+        const update = { output: finalOutput }
+        if (this.currentTurn?.input?.request) update.input = this.currentTurn.input
+        this.currentTrace.update(update)
+        if (this.currentTurn) this.currentTurn.output = finalOutput
         if (this.conversationStartTime) {
-          this.latencies.conversation.push(Date.now() - this.conversationStartTime)
+          this.latencies.conversation.push(duration)
         }
       }
 

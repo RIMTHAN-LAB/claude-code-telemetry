@@ -103,6 +103,67 @@ function createApiRequestLog(sessionId, options = {}) {
       { key: 'cache_creation_tokens', value: { intValue: cacheCreationTokens } },
       { key: 'cost_usd', value: { doubleValue: cost } },
       { key: 'duration_ms', value: { intValue: duration } },
+      ...(options.requestId
+        ? [{ key: 'request_id', value: { stringValue: options.requestId } }]
+        : []),
+      { key: 'event.timestamp', value: { stringValue: new Date().toISOString() } },
+    ],
+  }
+}
+
+/**
+ * Create a raw API request body log record
+ */
+function createApiRequestBodyLog(sessionId, body, options = {}) {
+  const attrs = createStandardAttributes(sessionId, options.attrs || {})
+  const timestamp = Date.now() * 1000000
+  const bodyText = typeof body === 'string' ? body : JSON.stringify(body)
+
+  return {
+    timeUnixNano: String(timestamp),
+    severityNumber: 9,
+    severityText: 'INFO',
+    body: { stringValue: 'claude_code.api_request_body' },
+    attributes: [
+      ...Object.entries(attrs).map(([k, v]) => ({
+        key: k,
+        value: { stringValue: String(v) },
+      })),
+      { key: 'body', value: { stringValue: bodyText } },
+      { key: 'body_length', value: { intValue: options.bodyLength || bodyText.length } },
+      { key: 'body_truncated', value: { boolValue: !!options.bodyTruncated } },
+      ...(options.requestId
+        ? [{ key: 'request_id', value: { stringValue: options.requestId } }]
+        : []),
+      { key: 'event.timestamp', value: { stringValue: new Date().toISOString() } },
+    ],
+  }
+}
+
+/**
+ * Create a raw API response body log record
+ */
+function createApiResponseBodyLog(sessionId, body, options = {}) {
+  const attrs = createStandardAttributes(sessionId, options.attrs || {})
+  const timestamp = Date.now() * 1000000
+  const bodyText = typeof body === 'string' ? body : JSON.stringify(body)
+
+  return {
+    timeUnixNano: String(timestamp),
+    severityNumber: 9,
+    severityText: 'INFO',
+    body: { stringValue: 'claude_code.api_response_body' },
+    attributes: [
+      ...Object.entries(attrs).map(([k, v]) => ({
+        key: k,
+        value: { stringValue: String(v) },
+      })),
+      { key: 'body', value: { stringValue: bodyText } },
+      { key: 'body_length', value: { intValue: options.bodyLength || bodyText.length } },
+      { key: 'body_truncated', value: { boolValue: !!options.bodyTruncated } },
+      ...(options.requestId
+        ? [{ key: 'request_id', value: { stringValue: options.requestId } }]
+        : []),
       { key: 'event.timestamp', value: { stringValue: new Date().toISOString() } },
     ],
   }
@@ -254,6 +315,8 @@ module.exports = {
   createStandardAttributes,
   createUserPromptLog,
   createApiRequestLog,
+  createApiRequestBodyLog,
+  createApiResponseBodyLog,
   createToolResultLog,
   createCostMetric,
   createTokenMetrics,

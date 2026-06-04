@@ -90,6 +90,7 @@ otelcol.processor.filter "drop_empty_native_generations" {
   traces {
     span = [
       `name == "claude_code.llm_request"`,
+      `name == "claude_code.interaction" and status.code != STATUS_CODE_ERROR`,
     ]
   }
 

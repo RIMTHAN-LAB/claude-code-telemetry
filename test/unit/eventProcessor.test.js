@@ -82,9 +82,12 @@ describe('Event Processor', () => {
         sessionId: 'test-session-123',
         organizationId: 'org-123',
         userAccountUuid: 'user-123',
+        userAccountId: undefined,
         userEmail: 'test@example.com',
         terminalType: 'vscode',
         appVersion: '1.0.0',
+        promptId: undefined,
+        requestId: undefined,
         timestamp: expect.any(String),
       })
       expect(mockSession.handleUserPrompt).toHaveBeenCalled()
@@ -123,12 +126,15 @@ describe('Event Processor', () => {
         costUsd: 0.15,
         durationMs: 1500,
         requestId: undefined,
+        clientRequestId: undefined,
         sessionId: 'test-session-123',
         organizationId: 'org-123',
         userAccountUuid: 'user-123',
+        userAccountId: undefined,
         userEmail: 'test@example.com',
         terminalType: 'vscode',
         appVersion: '1.0.0',
+        promptId: undefined,
         timestamp: expect.any(String),
       })
       expect(mockSession.handleApiRequest).toHaveBeenCalled()
@@ -160,9 +166,12 @@ describe('Event Processor', () => {
         sessionId: 'test-session-123',
         organizationId: undefined,
         userAccountUuid: undefined,
+        userAccountId: undefined,
         userEmail: undefined,
         terminalType: undefined,
         appVersion: undefined,
+        promptId: undefined,
+        requestId: undefined,
         timestamp: expect.any(String),
       })
       expect(mockSession.handleGenericEvent).toHaveBeenCalled()
@@ -197,9 +206,11 @@ describe('Event Processor', () => {
         sessionId: 'test-session-123',
         organizationId: 'org-123',
         userAccountUuid: 'user-123',
+        userAccountId: undefined,
         userEmail: 'test@example.com',
         terminalType: 'vscode',
         appVersion: '1.0.0',
+        promptId: undefined,
         timestamp: expect.any(String),
       })
       expect(mockSession.handleApiError).toHaveBeenCalled()
@@ -233,9 +244,12 @@ describe('Event Processor', () => {
         sessionId: 'test-session-123',
         organizationId: 'org-123',
         userAccountUuid: 'user-123',
+        userAccountId: undefined,
         userEmail: 'test@example.com',
         terminalType: 'vscode',
         appVersion: '1.0.0',
+        promptId: undefined,
+        requestId: undefined,
         timestamp: expect.any(String),
       })
       expect(mockSession.handleToolResult).toHaveBeenCalled()
@@ -261,9 +275,12 @@ describe('Event Processor', () => {
         sessionId: 'test-session-123', // Falls back to session.sessionId
         organizationId: undefined,
         userAccountUuid: undefined,
+        userAccountId: undefined,
         userEmail: undefined,
         terminalType: undefined,
         appVersion: undefined,
+        promptId: undefined,
+        requestId: undefined,
         timestamp: expect.any(String),
       })
     })
@@ -297,9 +314,12 @@ describe('Event Processor', () => {
         sessionId: 'test-session-123',
         organizationId: 'org-123',
         userAccountUuid: 'user-123',
+        userAccountId: undefined,
         userEmail: 'test@example.com',
         terminalType: 'vscode',
         appVersion: '1.0.0',
+        promptId: undefined,
+        requestId: undefined,
         timestamp: expect.any(String),
       })
       // Note: handleToolDecision is not implemented in SessionHandler

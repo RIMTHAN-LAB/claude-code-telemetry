@@ -9,6 +9,8 @@ const {
   generateTestSessionId,
   createUserPromptLog,
   createApiRequestLog,
+  createApiRequestBodyLog,
+  createApiResponseBodyLog,
   createToolResultLog,
   createCostMetric,
   createTokenMetrics,
@@ -58,7 +60,7 @@ describe('Langfuse Integration', () => {
     testSessionId = generateTestSessionId()
   })
 
-  test('processes user prompt and creates conversation trace', async () => {
+  test('processes user prompt and creates readable turn trace', async () => {
     if (!langfuseClient) return
 
     // Send user prompt
@@ -75,12 +77,12 @@ describe('Langfuse Integration', () => {
 
     // Wait for trace to appear in Langfuse
     const trace = await langfuseClient.waitForTrace({
-      name: 'conversation-',
+      name: 'Claude Code turn',
       sessionId: testSessionId,
     })
 
     expect(trace).toBeDefined()
-    expect(trace.name).toBe('conversation-1')
+    expect(trace.name).toBe('Claude Code turn')
     expect(trace.sessionId).toBe(testSessionId)
     expect(trace.input).toMatchObject({
       prompt: 'What is 2+2?',
@@ -106,7 +108,7 @@ describe('Langfuse Integration', () => {
 
     // Wait for conversation trace
     await langfuseClient.waitForTrace({
-      name: 'conversation-',
+      name: 'Claude Code turn',
       sessionId: testSessionId,
     })
 
@@ -130,7 +132,7 @@ describe('Langfuse Integration', () => {
 
     // Get trace with observations
     const traces = await langfuseClient.getTraces(10, testSessionId)
-    const conversationTrace = traces.find(t => t.name?.startsWith('conversation-'))
+    const conversationTrace = traces.find(t => t.name === 'Claude Code turn')
     expect(conversationTrace).toBeDefined()
 
     const fullTrace = await langfuseClient.getTrace(conversationTrace.id)
@@ -208,7 +210,7 @@ describe('Langfuse Integration', () => {
 
     // Wait for conversation trace
     const conversationTrace = await langfuseClient.waitForTrace({
-      name: 'conversation-',
+      name: 'Claude Code turn',
       sessionId: testSessionId,
     })
 
@@ -228,10 +230,10 @@ describe('Langfuse Integration', () => {
 
     // Verify tool event
     const events = fullTrace.observations?.filter(o => o.type === 'EVENT') || []
-    const toolEvent = events.find(e => e.name?.includes('tool-'))
+    const toolEvent = events.find(e => e.name?.startsWith('Tool: '))
 
     expect(toolEvent).toBeDefined()
-    expect(toolEvent.name).toBe('tool-Read')
+    expect(toolEvent.name).toBe('Tool: Read')
     expect(toolEvent.output).toMatchObject({
       success: true,
       durationMs: 150,
@@ -244,6 +246,11 @@ describe('Langfuse Integration', () => {
     // Simulate a complete Claude interaction
     const logs = [
       createUserPromptLog(testSessionId, 'Write a hello world function'),
+      createApiRequestBodyLog(testSessionId, {
+        model: 'claude-3-5-haiku-20241022',
+        messages: [{ role: 'user', content: 'Write a hello world function' }],
+        tools: [{ name: 'Write', input_schema: {} }],
+      }),
       createApiRequestLog(testSessionId, {
         model: 'claude-3-5-haiku-20241022',
         inputTokens: 50,
@@ -256,6 +263,13 @@ describe('Langfuse Integration', () => {
         outputTokens: 500,
         cacheReadTokens: 1000,
         cost: 0.015,
+      }),
+      createApiResponseBodyLog(testSessionId, {
+        id: 'msg_test',
+        model: 'claude-3-opus-20240229',
+        content: [{ type: 'text', text: 'Created hello world function.' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 200, output_tokens: 500 },
       }),
       createToolResultLog(testSessionId, 'Write', true, 300),
     ]
@@ -289,7 +303,7 @@ describe('Langfuse Integration', () => {
       session: true,
       conversationTrace: true,
       generations: 2, // Haiku + Opus
-      events: 1, // Tool usage
+      events: 3, // Raw request, raw response, and tool usage
       metadata: {
         organization: true,
         user: true,
