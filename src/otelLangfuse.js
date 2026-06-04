@@ -66,7 +66,7 @@ function addJsonAttr(attributes, key, value) {
 function addMetadata(attributes, prefix, metadata = {}) {
   for (const [key, value] of Object.entries(metadata || {})) {
     if (value == null) continue
-    const mappedValue = typeof value === 'object' ? safeJson(value) : value
+    const mappedValue = typeof value === 'object' ? safeJson(value) : String(value)
     addAttr(attributes, `${prefix}.${sanitizeSegment(key)}`, mappedValue)
   }
 }

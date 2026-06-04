@@ -84,7 +84,7 @@ describe('OtelLangfuse', () => {
     expect(rootAttrs['langfuse.environment'].stringValue).toBe('default')
     expect(rootAttrs['langfuse.trace.input'].stringValue).toBe(JSON.stringify({ prompt: 'hello' }))
     expect(rootAttrs['langfuse.trace.metadata.traceKind'].stringValue).toBe('turn')
-    expect(rootAttrs['langfuse.trace.metadata.sessionDurationSeconds'].intValue).toBe('121')
+    expect(rootAttrs['langfuse.trace.metadata.sessionDurationSeconds'].stringValue).toBe('121')
 
     const generationAttrs = attrMap(generationSpan)
     expect(generationAttrs['langfuse.trace.name'].stringValue).toBe('Claude Code turn')
