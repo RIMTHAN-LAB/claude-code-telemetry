@@ -8,6 +8,7 @@
  */
 
 // const http = require('http') // Currently unused
+const zlib = require('zlib')
 const { startTestServer, stopTestServer } = require('./testServer')
 
 // Skip tests if running in CI without proper setup
@@ -76,6 +77,41 @@ describeIntegration('OTLP Server Integration Tests', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(testLog),
+      })
+
+      expect(response.status).toBe(200)
+      const result = await response.json()
+      expect(result).toHaveProperty('partialSuccess')
+    })
+
+    test('POST /v1/logs accepts gzip-compressed OTLP logs', async () => {
+      const testLog = {
+        resourceLogs: [{
+          resource: {
+            attributes: [
+              { key: 'service.name', value: { stringValue: 'test-service' } },
+            ],
+          },
+          scopeLogs: [{
+            scope: { name: 'test-scope' },
+            logRecords: [{
+              timeUnixNano: Date.now() * 1000000,
+              body: { stringValue: 'test log message' },
+              attributes: [
+                { key: 'test.attribute', value: { stringValue: 'test-value' } },
+              ],
+            }],
+          }],
+        }],
+      }
+
+      const response = await fetch(`${baseUrl}/v1/logs`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Encoding': 'gzip',
+        },
+        body: zlib.gzipSync(JSON.stringify(testLog)),
       })
 
       expect(response.status).toBe(200)

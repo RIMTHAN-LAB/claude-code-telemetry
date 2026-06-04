@@ -20,6 +20,7 @@
 require('dotenv').config()
 
 const http = require('http')
+const zlib = require('zlib')
 const { Langfuse } = require('langfuse')
 // const { v4: uuidv4 } = require('uuid') // Currently unused
 const pino = require('pino')
@@ -90,6 +91,27 @@ const serverStartTime = Date.now()
 let requestCount = 0
 let errorCount = 0
 
+function decodeRequestBody(req, body) {
+  const encoding = String(req.headers['content-encoding'] || 'identity').toLowerCase()
+
+  if (encoding === 'identity' || encoding === '') {
+    return body
+  }
+  if (encoding === 'gzip' || encoding === 'x-gzip') {
+    return zlib.gunzipSync(body)
+  }
+  if (encoding === 'deflate') {
+    return zlib.inflateSync(body)
+  }
+  if (encoding === 'br') {
+    return zlib.brotliDecompressSync(body)
+  }
+
+  const error = new Error(`Unsupported content-encoding: ${encoding}`)
+  error.statusCode = 415
+  throw error
+}
+
 // HTTP Server with request size limit and authentication
 const server = http.createServer((req, res) => {
   requestCount++
@@ -132,7 +154,7 @@ const server = http.createServer((req, res) => {
     req.on('end', async () => {
       // Route based on path
       try {
-        const body = Buffer.concat(chunks)
+        const body = decodeRequestBody(req, Buffer.concat(chunks))
         if (req.url === '/v1/traces') {
           await handleTraces(body, res, sessions, langfuse)
         } else if (req.url === '/v1/metrics') {
@@ -146,8 +168,8 @@ const server = http.createServer((req, res) => {
       } catch (error) {
         errorCount++
         logger.error({ error, url: req.url }, 'Error handling request')
-        res.writeHead(500, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ error: 'Internal server error' }))
+        res.writeHead(error.statusCode || 500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: error.statusCode ? error.message : 'Internal server error' }))
       }
     })
   } else {
