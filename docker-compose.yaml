@@ -44,8 +44,22 @@ services:
       - traefik.http.routers.ccotel-health-https.service=ccotel-health-https
       - traefik.http.routers.ccotel-health-https.tls.certresolver=letsencrypt
       - traefik.http.routers.ccotel-health-https.tls=true
+      - traefik.http.routers.ccotel-bridge-otlp-http.entryPoints=http
+      - traefik.http.routers.ccotel-bridge-otlp-http.middlewares=redirect-to-https
+      - traefik.http.routers.ccotel-bridge-otlp-http.priority=100
+      - traefik.http.routers.ccotel-bridge-otlp-http.rule=Host(`otel.telemetry.rimthan.army`) && (Path(`/v1/logs`) || Path(`/v1/metrics`))
+      - traefik.http.routers.ccotel-bridge-otlp-http.service=ccotel-bridge-otlp-http
+      - traefik.http.routers.ccotel-bridge-otlp-https.entryPoints=https
+      - traefik.http.routers.ccotel-bridge-otlp-https.middlewares=gzip
+      - traefik.http.routers.ccotel-bridge-otlp-https.priority=100
+      - traefik.http.routers.ccotel-bridge-otlp-https.rule=Host(`otel.telemetry.rimthan.army`) && (Path(`/v1/logs`) || Path(`/v1/metrics`))
+      - traefik.http.routers.ccotel-bridge-otlp-https.service=ccotel-bridge-otlp-https
+      - traefik.http.routers.ccotel-bridge-otlp-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.ccotel-bridge-otlp-https.tls=true
       - traefik.http.services.ccotel-health-http.loadbalancer.server.port=4318
       - traefik.http.services.ccotel-health-https.loadbalancer.server.port=4318
+      - traefik.http.services.ccotel-bridge-otlp-http.loadbalancer.server.port=4318
+      - traefik.http.services.ccotel-bridge-otlp-https.loadbalancer.server.port=4318
 
   alloy:
     build:

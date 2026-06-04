@@ -6,12 +6,14 @@ keeps all secrets in Coolify environment variables.
 
 ## Public endpoints
 
-- OTLP Alloy receiver: `https://otel.telemetry.rimthan.army`
+- OTLP endpoint: `https://otel.telemetry.rimthan.army`
 - Langfuse UI: `https://langfuse.telemetry.rimthan.army`
 
-`alloy` is the public OTLP front door and requires the shared bearer token.
-It routes logs and metrics to the internal `telemetry-bridge`, and traces to
-Langfuse's OTLP endpoint. The bridge is still routed only for `/health`.
+Traefik routes `/v1/logs` and `/v1/metrics` directly to the
+`telemetry-bridge`, and `/v1/traces` to `alloy`. This keeps the readable
+bridge-created Langfuse traces authoritative for logs/metrics while preserving
+the Alloy path for Claude Code traces beta. Both paths require the shared bearer
+token. The bridge also owns `/health`.
 Postgres, ClickHouse, Redis, and MinIO remain internal to the compose network.
 
 ## Required Coolify env
