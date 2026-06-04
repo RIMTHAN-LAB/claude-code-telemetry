@@ -12,10 +12,8 @@ otelcol.auth.bearer "bridge" {
 }
 
 otelcol.auth.basic "langfuse" {
-  client_auth {
-    username = sys.env("LANGFUSE_INIT_PROJECT_PUBLIC_KEY")
-    password = sys.env("LANGFUSE_INIT_PROJECT_SECRET_KEY")
-  }
+  username = sys.env("LANGFUSE_INIT_PROJECT_PUBLIC_KEY")
+  password = sys.env("LANGFUSE_INIT_PROJECT_SECRET_KEY")
 }
 
 otelcol.receiver.otlp "claude_code" {
