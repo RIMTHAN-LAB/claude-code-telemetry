@@ -45,6 +45,7 @@ function createConfig() {
       baseUrl: process.env.LANGFUSE_HOST || 'http://localhost:3000',
       flushAt: parseInt(process.env.LANGFUSE_FLUSH_AT || '20', 10),
       flushInterval: parseInt(process.env.LANGFUSE_FLUSH_INTERVAL || '10000', 10),
+      emissionMode: process.env.LANGFUSE_EMISSION_MODE || 'otel',
     },
     retryAttempts: parseInt(process.env.RETRY_ATTEMPTS || '3', 10),
     apiKey: process.env.API_KEY,
@@ -62,6 +63,7 @@ function printConfigHelp() {
   logger.info('  LANGFUSE_SECRET_KEY - Your Langfuse secret API key')
   logger.info('Optional environment variables:')
   logger.info('  LANGFUSE_HOST - Langfuse API URL (default: http://localhost:3000)')
+  logger.info('  LANGFUSE_EMISSION_MODE - Langfuse emission path: otel or sdk (default: otel)')
   logger.info('  OTLP_RECEIVER_PORT - Port to listen on (default: 4318)')
   logger.info('  OTLP_RECEIVER_HOST - Host to bind to (default: 127.0.0.1)')
   logger.info('  SESSION_TIMEOUT - Session timeout in ms (default: 3600000)')

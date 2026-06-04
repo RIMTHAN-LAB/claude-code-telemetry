@@ -21,10 +21,10 @@ require('dotenv').config()
 
 const http = require('http')
 const zlib = require('zlib')
-const { Langfuse } = require('langfuse')
 // const { v4: uuidv4 } = require('uuid') // Currently unused
 const pino = require('pino')
 const { retry } = require('./sessionHandler')
+const { OtelLangfuse } = require('./otelLangfuse')
 const { handleTraces, handleMetrics, handleLogs, handleHealthCheck } = require('./requestHandlers')
 const {
   validateConfig: validateConfigHelper,
@@ -67,14 +67,33 @@ function validateConfig() {
   }
 }
 
-// Initialize Langfuse with error handling
-const langfuse = new Langfuse({
-  publicKey: config.langfuse.publicKey,
-  secretKey: config.langfuse.secretKey,
-  baseUrl: config.langfuse.baseUrl,
-  flushAt: config.langfuse.flushAt,
-  flushInterval: config.langfuse.flushInterval,
-})
+function createLangfuseClient() {
+  if (config.langfuse.emissionMode === 'sdk') {
+    const { Langfuse } = require('langfuse')
+    return new Langfuse({
+      publicKey: config.langfuse.publicKey,
+      secretKey: config.langfuse.secretKey,
+      baseUrl: config.langfuse.baseUrl,
+      flushAt: config.langfuse.flushAt,
+      flushInterval: config.langfuse.flushInterval,
+    })
+  }
+
+  return new OtelLangfuse({
+    publicKey: config.langfuse.publicKey,
+    secretKey: config.langfuse.secretKey,
+    baseUrl: config.langfuse.baseUrl,
+    flushAt: config.langfuse.flushAt,
+    resourceAttributes: {
+      'deployment.environment': config.nodeEnv,
+      'service.version': process.env.CLAUDE_CODE_VERSION || process.env.SERVICE_VERSION || 'unknown',
+    },
+  })
+}
+
+// Initialize Langfuse with error handling. OTEL mode writes directly to
+// /api/public/otel/v1/traces so Langfuse live observation evaluators can run.
+const langfuse = createLangfuseClient()
 
 // In test environment, try to prevent Langfuse from keeping process alive
 if (process.env.NODE_ENV === 'test' && langfuse._flushInterval) {
@@ -82,7 +101,7 @@ if (process.env.NODE_ENV === 'test' && langfuse._flushInterval) {
 }
 
 langfuse.on('error', (error) => {
-  logger.error({ error }, 'Langfuse SDK error')
+  logger.error({ error }, 'Langfuse export error')
 })
 
 // Session management
