@@ -34,6 +34,7 @@ class SessionHandler {
     // Current conversation state
     this.currentTrace = null
     this.currentSpan = null
+    this.currentPrompt = null
     this.toolSequence = []
     this.conversationStartTime = null
 
@@ -109,6 +110,9 @@ class SessionHandler {
   }
 
   handleUserPrompt(attrs, timestamp) {
+    const prompt = attrs.prompt || '[Prompt hidden]'
+    this.currentPrompt = prompt
+
     logger.info(
       { sessionId: this.sessionId, promptLength: attrs.prompt_length || 0 },
       'User prompt received',
@@ -124,7 +128,7 @@ class SessionHandler {
       sessionId: this.sessionId,
       userId: attrs['user.email'] || attrs['user.id'] || this.metadata.userId,
       input: {
-        prompt: attrs.prompt || '[Prompt hidden]',
+        prompt,
         length: attrs.prompt_length || 0,
       },
       metadata: {
@@ -151,13 +155,14 @@ class SessionHandler {
     this.conversationCount++
     this.conversationStartTime = Date.now()
     this.toolSequence = []
+    this.currentPrompt = attrs.prompt || attrs.user_prompt || this.currentPrompt
 
     this.currentTrace = this.langfuse.trace({
       name: `conversation-${this.conversationCount}`,
       sessionId: attrs['session.id'] || this.sessionId,
       userId: attrs['user.email'] || attrs['user.id'] || this.userEmail || this.metadata.userId,
       input: {
-        prompt: attrs.prompt || attrs.user_prompt || '[No user prompt captured yet]',
+        prompt: this.currentPrompt || '[No user prompt captured yet]',
       },
       metadata: {
         conversationIndex: this.conversationCount,
@@ -407,6 +412,8 @@ class SessionHandler {
     const success = attrs.success
     const isError = /error|failed|failure|retries_exhausted/.test(shortName) || success === false || success === 'false'
     const level = isError ? 'ERROR' : 'DEFAULT'
+    const isApiRequestBody = /api_request_body/.test(shortName)
+    const isApiResponseBody = /api_response_body/.test(shortName)
 
     const input = {}
     const output = {}
@@ -427,9 +434,39 @@ class SessionHandler {
       input.prompt = attrs.prompt || attrs.user_prompt
     }
     if (attrs.body || attrs.body_ref || attrs.body_length) {
-      input.body = attrs.body
-      input.bodyRef = attrs.body_ref
-      input.bodyLength = attrs.body_length
+      const bodyPayload = {
+        body: attrs.body,
+        bodyRef: attrs.body_ref,
+        bodyLength: attrs.body_length,
+        bodyTruncated: attrs.body_truncated,
+      }
+
+      if (isApiResponseBody) {
+        output.body = bodyPayload.body
+        output.bodyRef = bodyPayload.bodyRef
+        output.bodyLength = bodyPayload.bodyLength
+        output.bodyTruncated = bodyPayload.bodyTruncated
+
+        if (trace.update) {
+          trace.update({
+            output: bodyPayload,
+          })
+        }
+      } else {
+        input.body = bodyPayload.body
+        input.bodyRef = bodyPayload.bodyRef
+        input.bodyLength = bodyPayload.bodyLength
+        input.bodyTruncated = bodyPayload.bodyTruncated
+
+        if (isApiRequestBody && trace.update) {
+          trace.update({
+            input: {
+              prompt: this.currentPrompt || attrs.prompt || attrs.user_prompt || '[No user prompt captured yet]',
+              apiRequestBody: bodyPayload,
+            },
+          })
+        }
+      }
     }
     if (attrs.tool_input || attrs.tool_parameters || attrs.full_command) {
       input.toolInput = attrs.tool_input

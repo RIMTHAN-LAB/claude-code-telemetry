@@ -544,6 +544,79 @@ describe('SessionHandler', () => {
     })
   })
 
+  describe('handleGenericEvent', () => {
+    test('stores API request body as input and preserves the current prompt', () => {
+      session.handleUserPrompt({
+        prompt: 'Find the largest files',
+        prompt_length: 22,
+        'user.email': 'test@example.com',
+      }, '2024-07-31T10:00:00Z')
+
+      const trace = session.currentTrace
+
+      session.handleGenericEvent('claude_code.api_request_body', {
+        body: '{"messages":[{"role":"user","content":"Find the largest files"}]}',
+        body_length: 64,
+        body_truncated: false,
+      }, {}, '2024-07-31T10:00:01Z')
+
+      expect(mockLangfuseInstance.event).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'claude-api_request_body',
+        traceId: 'test-trace-id',
+        input: expect.objectContaining({
+          body: expect.stringContaining('messages'),
+          bodyLength: 64,
+          bodyTruncated: false,
+        }),
+        output: undefined,
+      }))
+      expect(trace.update).toHaveBeenCalledWith({
+        input: {
+          prompt: 'Find the largest files',
+          apiRequestBody: {
+            body: expect.stringContaining('messages'),
+            bodyRef: undefined,
+            bodyLength: 64,
+            bodyTruncated: false,
+          },
+        },
+      })
+    })
+
+    test('stores API response body as output and updates trace output', () => {
+      session.handleUserPrompt({
+        prompt: 'Say hi',
+        prompt_length: 6,
+        'user.email': 'test@example.com',
+      }, '2024-07-31T10:00:00Z')
+
+      const trace = session.currentTrace
+
+      session.handleGenericEvent('claude_code.api_response_body', {
+        body: '{"role":"assistant","content":[{"type":"text","text":"hi"}]}',
+        body_length: 58,
+      }, {}, '2024-07-31T10:00:01Z')
+
+      expect(mockLangfuseInstance.event).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'claude-api_response_body',
+        traceId: 'test-trace-id',
+        input: undefined,
+        output: expect.objectContaining({
+          body: expect.stringContaining('assistant'),
+          bodyLength: 58,
+        }),
+      }))
+      expect(trace.update).toHaveBeenCalledWith({
+        output: {
+          body: expect.stringContaining('assistant'),
+          bodyRef: undefined,
+          bodyLength: 58,
+          bodyTruncated: undefined,
+        },
+      })
+    })
+  })
+
   describe('processLogRecord', () => {
     test('processes user prompt event', () => {
       const logRecord = {

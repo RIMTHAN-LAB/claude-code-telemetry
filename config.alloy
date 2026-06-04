@@ -80,6 +80,21 @@ otelcol.processor.transform "langfuse_semantics" {
   }
 
   output {
+    traces = [otelcol.processor.filter.drop_empty_native_generations.input]
+  }
+}
+
+otelcol.processor.filter "drop_empty_native_generations" {
+  error_mode = "ignore"
+
+  trace_conditions {
+    context = "span"
+    conditions = [
+      `span.name == "claude_code.llm_request" and span.attributes["langfuse.observation.input"] == nil and span.attributes["langfuse.observation.output"] == nil and (span.attributes["input_tokens"] == "null" or span.attributes["input_tokens"] == nil) and (span.attributes["output_tokens"] == "null" or span.attributes["output_tokens"] == nil)`,
+    ]
+  }
+
+  output {
     traces = [otelcol.processor.batch.langfuse.input]
   }
 }
