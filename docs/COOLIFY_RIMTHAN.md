@@ -6,11 +6,13 @@ keeps all secrets in Coolify environment variables.
 
 ## Public endpoints
 
-- OTLP bridge: `https://otel.telemetry.rimthan.army`
+- OTLP Alloy receiver: `https://otel.telemetry.rimthan.army`
 - Langfuse UI: `https://langfuse.telemetry.rimthan.army`
 
-Only `telemetry-bridge` and `langfuse-web` are exposed through Coolify. Postgres,
-ClickHouse, Redis, and MinIO remain internal to the compose network.
+`alloy` is the public OTLP front door and requires the shared bearer token.
+It routes logs and metrics to the internal `telemetry-bridge`, and traces to
+Langfuse's OTLP endpoint. The bridge is still routed only for `/health`.
+Postgres, ClickHouse, Redis, and MinIO remain internal to the compose network.
 
 ## Required Coolify env
 
@@ -47,22 +49,23 @@ MAX_REQUEST_SIZE=10485760
 
 ## Claude Code pilot env
 
-Do not enable trace export yet. The bridge currently acknowledges `/v1/traces`
-but does not process spans.
-
 ```json
 {
   "env": {
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
     "OTEL_LOGS_EXPORTER": "otlp",
     "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_TRACES_EXPORTER": "otlp",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
     "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL": "http/json",
     "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL": "http/json",
+    "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "http/json",
     "OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.telemetry.rimthan.army",
     "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer <OTEL_BRIDGE_API_KEY>",
     "OTEL_LOG_USER_PROMPTS": "1",
-    "OTEL_LOG_TOOL_DETAILS": "1"
+    "OTEL_LOG_TOOL_DETAILS": "1",
+    "OTEL_LOG_TOOL_CONTENT": "1"
   }
 }
 ```
@@ -81,4 +84,9 @@ curl -fsS -X POST https://otel.telemetry.rimthan.army/v1/logs \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer ${OTEL_BRIDGE_API_KEY}" \
   -d '{"resourceLogs":[]}'
+
+curl -fsS -X POST https://otel.telemetry.rimthan.army/v1/traces \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${OTEL_BRIDGE_API_KEY}" \
+  -d '{"resourceSpans":[]}'
 ```

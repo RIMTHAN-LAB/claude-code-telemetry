@@ -32,18 +32,60 @@ services:
       - traefik.enable=true
       - traefik.http.middlewares.gzip.compress=true
       - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
-      - traefik.http.routers.ccotel-bridge-http.entryPoints=http
-      - traefik.http.routers.ccotel-bridge-http.middlewares=redirect-to-https
-      - traefik.http.routers.ccotel-bridge-http.rule=Host(`otel.telemetry.rimthan.army`)
-      - traefik.http.routers.ccotel-bridge-http.service=ccotel-bridge-http
-      - traefik.http.routers.ccotel-bridge-https.entryPoints=https
-      - traefik.http.routers.ccotel-bridge-https.middlewares=gzip
-      - traefik.http.routers.ccotel-bridge-https.rule=Host(`otel.telemetry.rimthan.army`)
-      - traefik.http.routers.ccotel-bridge-https.service=ccotel-bridge-https
-      - traefik.http.routers.ccotel-bridge-https.tls.certresolver=letsencrypt
-      - traefik.http.routers.ccotel-bridge-https.tls=true
-      - traefik.http.services.ccotel-bridge-http.loadbalancer.server.port=4318
-      - traefik.http.services.ccotel-bridge-https.loadbalancer.server.port=4318
+      - traefik.http.routers.ccotel-health-http.entryPoints=http
+      - traefik.http.routers.ccotel-health-http.middlewares=redirect-to-https
+      - traefik.http.routers.ccotel-health-http.priority=100
+      - traefik.http.routers.ccotel-health-http.rule=Host(`otel.telemetry.rimthan.army`) && Path(`/health`)
+      - traefik.http.routers.ccotel-health-http.service=ccotel-health-http
+      - traefik.http.routers.ccotel-health-https.entryPoints=https
+      - traefik.http.routers.ccotel-health-https.middlewares=gzip
+      - traefik.http.routers.ccotel-health-https.priority=100
+      - traefik.http.routers.ccotel-health-https.rule=Host(`otel.telemetry.rimthan.army`) && Path(`/health`)
+      - traefik.http.routers.ccotel-health-https.service=ccotel-health-https
+      - traefik.http.routers.ccotel-health-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.ccotel-health-https.tls=true
+      - traefik.http.services.ccotel-health-http.loadbalancer.server.port=4318
+      - traefik.http.services.ccotel-health-https.loadbalancer.server.port=4318
+
+  alloy:
+    image: docker.io/grafana/alloy:v1.16.1
+    restart: always
+    depends_on:
+      telemetry-bridge:
+        condition: service_healthy
+      langfuse-web:
+        condition: service_started
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - OTEL_BRIDGE_API_KEY=${OTEL_BRIDGE_API_KEY:?}
+      - LANGFUSE_INIT_PROJECT_PUBLIC_KEY=${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:?}
+      - LANGFUSE_INIT_PROJECT_SECRET_KEY=${LANGFUSE_INIT_PROJECT_SECRET_KEY:?}
+    volumes:
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+      - alloy_data:/var/lib/alloy/data
+    labels:
+      - traefik.enable=true
+      - traefik.http.middlewares.gzip.compress=true
+      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
+      - traefik.http.routers.ccotel-alloy-http.entryPoints=http
+      - traefik.http.routers.ccotel-alloy-http.middlewares=redirect-to-https
+      - traefik.http.routers.ccotel-alloy-http.priority=10
+      - traefik.http.routers.ccotel-alloy-http.rule=Host(`otel.telemetry.rimthan.army`)
+      - traefik.http.routers.ccotel-alloy-http.service=ccotel-alloy-http
+      - traefik.http.routers.ccotel-alloy-https.entryPoints=https
+      - traefik.http.routers.ccotel-alloy-https.middlewares=gzip
+      - traefik.http.routers.ccotel-alloy-https.priority=10
+      - traefik.http.routers.ccotel-alloy-https.rule=Host(`otel.telemetry.rimthan.army`)
+      - traefik.http.routers.ccotel-alloy-https.service=ccotel-alloy-https
+      - traefik.http.routers.ccotel-alloy-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.ccotel-alloy-https.tls=true
+      - traefik.http.services.ccotel-alloy-http.loadbalancer.server.port=4318
+      - traefik.http.services.ccotel-alloy-https.loadbalancer.server.port=4318
 
   langfuse-worker:
     image: docker.io/langfuse/langfuse-worker:3.178.0
@@ -248,4 +290,6 @@ volumes:
   langfuse_minio_data:
     driver: local
   langfuse_redis_data:
+    driver: local
+  alloy_data:
     driver: local

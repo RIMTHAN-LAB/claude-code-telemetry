@@ -1,0 +1,82 @@
+logging {
+  level  = sys.env("LOG_LEVEL")
+  format = "logfmt"
+}
+
+otelcol.auth.bearer "ingress" {
+  token = sys.env("OTEL_BRIDGE_API_KEY")
+}
+
+otelcol.auth.bearer "bridge" {
+  token = sys.env("OTEL_BRIDGE_API_KEY")
+}
+
+otelcol.auth.basic "langfuse" {
+  client_auth {
+    username = sys.env("LANGFUSE_INIT_PROJECT_PUBLIC_KEY")
+    password = sys.env("LANGFUSE_INIT_PROJECT_SECRET_KEY")
+  }
+}
+
+otelcol.receiver.otlp "claude_code" {
+  http {
+    endpoint = "0.0.0.0:4318"
+    auth     = otelcol.auth.bearer.ingress.handler
+  }
+
+  output {
+    logs    = [otelcol.processor.batch.bridge.input]
+    metrics = [otelcol.processor.batch.bridge.input]
+    traces  = [otelcol.processor.batch.langfuse.input]
+  }
+}
+
+otelcol.processor.batch "bridge" {
+  timeout             = "1s"
+  send_batch_size     = 512
+  send_batch_max_size = 1024
+
+  output {
+    logs    = [otelcol.exporter.otlphttp.bridge.input]
+    metrics = [otelcol.exporter.otlphttp.bridge.input]
+  }
+}
+
+otelcol.processor.batch "langfuse" {
+  timeout             = "1s"
+  send_batch_size     = 512
+  send_batch_max_size = 1024
+
+  output {
+    traces = [otelcol.exporter.otlphttp.langfuse.input]
+  }
+}
+
+otelcol.exporter.otlphttp "bridge" {
+  encoding = "json"
+
+  client {
+    endpoint = "http://telemetry-bridge:4318"
+    auth     = otelcol.auth.bearer.bridge.handler
+
+    tls {
+      insecure = true
+    }
+  }
+}
+
+otelcol.exporter.otlphttp "langfuse" {
+  encoding = "json"
+
+  client {
+    endpoint = "http://langfuse-web:3000/api/public/otel"
+    auth     = otelcol.auth.basic.langfuse.handler
+    headers  = {
+      "x-langfuse-ingestion-version" = "4",
+    }
+
+    tls {
+      insecure = true
+    }
+  }
+}
