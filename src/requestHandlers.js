@@ -11,6 +11,36 @@ const { processMetric } = require('./metricsProcessor')
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 
+async function flushLangfuse(langfuse) {
+  if (!langfuse?.flushAsync) {
+    return
+  }
+
+  const defaultTimeoutMs = process.env.NODE_ENV === 'test' ? 100 : 2000
+  const timeoutMs = parseInt(process.env.LANGFUSE_FLUSH_TIMEOUT_MS || String(defaultTimeoutMs), 10)
+  let timeout
+  let timedOut = false
+
+  try {
+    await Promise.race([
+      langfuse.flushAsync(),
+      new Promise((resolve) => {
+        timeout = setTimeout(() => {
+          timedOut = true
+          resolve()
+        }, timeoutMs)
+      }),
+    ])
+    if (timedOut) {
+      logger.warn({ timeoutMs }, 'Timed out flushing Langfuse')
+    }
+  } catch (error) {
+    logger.error({ error: error.message || error }, 'Error flushing Langfuse')
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 /**
  * Handle OTLP traces endpoint
  */
@@ -31,7 +61,7 @@ function handleTraces(data, res, sessions, langfuse) {
 /**
  * Handle OTLP metrics endpoint
  */
-function handleMetrics(data, res, sessions, langfuse) {
+async function handleMetrics(data, res, sessions, langfuse) {
   try {
     const metrics = JSON.parse(data.toString())
     logger.info({ size: data.length }, 'Received metrics')
@@ -80,6 +110,7 @@ function handleMetrics(data, res, sessions, langfuse) {
       }
     }
 
+    await flushLangfuse(langfuse)
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ partialSuccess: {} }))
   } catch (error) {
@@ -92,7 +123,7 @@ function handleMetrics(data, res, sessions, langfuse) {
 /**
  * Handle OTLP logs endpoint
  */
-function handleLogs(data, res, sessions, langfuse) {
+async function handleLogs(data, res, sessions, langfuse) {
   try {
     const logs = JSON.parse(data.toString())
     logger.debug({ size: data.length }, 'Received logs')
@@ -143,6 +174,7 @@ function handleLogs(data, res, sessions, langfuse) {
       }
     }
 
+    await flushLangfuse(langfuse)
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ partialSuccess: {} }))
   } catch (error) {
@@ -174,4 +206,5 @@ module.exports = {
   handleMetrics,
   handleLogs,
   handleHealthCheck,
+  flushLangfuse,
 }

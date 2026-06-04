@@ -47,6 +47,7 @@ describe('Request Handlers', () => {
     mockLangfuse = {
       trace: jest.fn(),
       span: jest.fn(),
+      flushAsync: jest.fn().mockResolvedValue(undefined),
     }
   })
 
@@ -80,7 +81,7 @@ describe('Request Handlers', () => {
   })
 
   describe('handleMetrics', () => {
-    test('processes metrics with session', () => {
+    test('processes metrics with session', async () => {
       const { processMetric } = require('../../src/metricsProcessor')
       const { SessionHandler } = require('../../src/sessionHandler')
 
@@ -109,17 +110,18 @@ describe('Request Handlers', () => {
         }],
       })
 
-      handleMetrics(data, mockRes, mockSessions, mockLangfuse)
+      await handleMetrics(data, mockRes, mockSessions, mockLangfuse)
 
       expect(mockRes.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' })
       expect(mockRes.end).toHaveBeenCalledWith(JSON.stringify({ partialSuccess: {} }))
+      expect(mockLangfuse.flushAsync).toHaveBeenCalled()
       expect(mockSessions.size).toBe(1)
       expect(mockSessions.has('test-session')).toBe(true)
       expect(SessionHandler).toHaveBeenCalledWith('test-session', expect.any(Object), mockLangfuse)
       expect(processMetric).toHaveBeenCalled()
     })
 
-    test('handles metrics without session ID', () => {
+    test('handles metrics without session ID', async () => {
       const data = JSON.stringify({
         resourceMetrics: [{
           resource: { attributes: [] },
@@ -137,13 +139,14 @@ describe('Request Handlers', () => {
         }],
       })
 
-      handleMetrics(data, mockRes, mockSessions, mockLangfuse)
+      await handleMetrics(data, mockRes, mockSessions, mockLangfuse)
 
       expect(mockRes.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' })
+      expect(mockLangfuse.flushAsync).toHaveBeenCalled()
       expect(mockSessions.size).toBe(0)
     })
 
-    test('logs metrics payload in debug mode', () => {
+    test('logs metrics payload in debug mode', async () => {
       const originalLevel = process.env.LOG_LEVEL
       process.env.LOG_LEVEL = 'debug'
 
@@ -164,27 +167,29 @@ describe('Request Handlers', () => {
         }],
       })
 
-      handleMetrics(data, mockRes, mockSessions, mockLangfuse)
+      await handleMetrics(data, mockRes, mockSessions, mockLangfuse)
 
       expect(mockRes.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' })
+      expect(mockLangfuse.flushAsync).toHaveBeenCalled()
 
       process.env.LOG_LEVEL = originalLevel
     })
 
-    test('returns 400 for invalid JSON', () => {
+    test('returns 400 for invalid JSON', async () => {
       const data = '{'
 
-      handleMetrics(data, mockRes, mockSessions, mockLangfuse)
+      await handleMetrics(data, mockRes, mockSessions, mockLangfuse)
 
       expect(mockRes.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' })
       expect(mockRes.end).toHaveBeenCalled()
+      expect(mockLangfuse.flushAsync).not.toHaveBeenCalled()
       const errorResponse = JSON.parse(mockRes.end.mock.calls[0][0])
       expect(errorResponse.error).toMatch(/JSON/)
     })
   })
 
   describe('handleLogs', () => {
-    test('processes logs with session ID', () => {
+    test('processes logs with session ID', async () => {
       const data = JSON.stringify({
         resourceLogs: [{
           resource: {
@@ -205,15 +210,16 @@ describe('Request Handlers', () => {
         }],
       })
 
-      handleLogs(data, mockRes, mockSessions, mockLangfuse)
+      await handleLogs(data, mockRes, mockSessions, mockLangfuse)
 
       expect(mockRes.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' })
       expect(mockRes.end).toHaveBeenCalledWith(JSON.stringify({ partialSuccess: {} }))
+      expect(mockLangfuse.flushAsync).toHaveBeenCalled()
       expect(mockSessions.size).toBe(1)
       expect(mockSessions.has('test-session')).toBe(true)
     })
 
-    test('creates session from user ID and timestamp', () => {
+    test('creates session from user ID and timestamp', async () => {
       const data = JSON.stringify({
         resourceLogs: [{
           resource: { attributes: [] },
@@ -230,15 +236,16 @@ describe('Request Handlers', () => {
         }],
       })
 
-      handleLogs(data, mockRes, mockSessions, mockLangfuse)
+      await handleLogs(data, mockRes, mockSessions, mockLangfuse)
 
       expect(mockRes.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' })
+      expect(mockLangfuse.flushAsync).toHaveBeenCalled()
       expect(mockSessions.size).toBe(1)
       const sessionId = Array.from(mockSessions.keys())[0]
       expect(sessionId).toMatch(/test-example-com-2024-01-01T12/)
     })
 
-    test('logs without session are ignored', () => {
+    test('logs without session are ignored', async () => {
       const data = JSON.stringify({
         resourceLogs: [{
           resource: { attributes: [] },
@@ -252,19 +259,21 @@ describe('Request Handlers', () => {
         }],
       })
 
-      handleLogs(data, mockRes, mockSessions, mockLangfuse)
+      await handleLogs(data, mockRes, mockSessions, mockLangfuse)
 
       expect(mockRes.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' })
+      expect(mockLangfuse.flushAsync).toHaveBeenCalled()
       expect(mockSessions.size).toBe(0)
     })
 
-    test('returns 400 for invalid JSON', () => {
+    test('returns 400 for invalid JSON', async () => {
       const data = 'not json'
 
-      handleLogs(data, mockRes, mockSessions, mockLangfuse)
+      await handleLogs(data, mockRes, mockSessions, mockLangfuse)
 
       expect(mockRes.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' })
       expect(mockRes.end).toHaveBeenCalled()
+      expect(mockLangfuse.flushAsync).not.toHaveBeenCalled()
       const errorResponse = JSON.parse(mockRes.end.mock.calls[0][0])
       expect(errorResponse.error).toMatch(/json/i)
     })

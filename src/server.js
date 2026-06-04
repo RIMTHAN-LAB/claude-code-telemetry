@@ -129,16 +129,16 @@ const server = http.createServer((req, res) => {
       chunks.push(chunk)
     })
 
-    req.on('end', () => {
+    req.on('end', async () => {
       // Route based on path
       try {
         const body = Buffer.concat(chunks)
         if (req.url === '/v1/traces') {
-          handleTraces(body, res, sessions, langfuse)
+          await handleTraces(body, res, sessions, langfuse)
         } else if (req.url === '/v1/metrics') {
-          handleMetrics(body, res, sessions, langfuse)
+          await handleMetrics(body, res, sessions, langfuse)
         } else if (req.url === '/v1/logs') {
-          handleLogs(body, res, sessions, langfuse)
+          await handleLogs(body, res, sessions, langfuse)
         } else {
           res.writeHead(404)
           res.end('Not found')
