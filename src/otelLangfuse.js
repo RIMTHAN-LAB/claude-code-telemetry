@@ -90,6 +90,7 @@ class OtelLangfuseObservation {
     this.params = { ...params }
     this.createdAt = params.startTime || new Date()
     this.updatedAt = new Date()
+    this.revision = 0
     this.dirty = true
     this.exported = false
   }
@@ -104,6 +105,7 @@ class OtelLangfuseObservation {
       },
     }
     this.updatedAt = new Date()
+    this.revision += 1
     this.dirty = true
   }
 
@@ -280,51 +282,63 @@ class OtelLangfuse {
     return span
   }
 
-  buildPayload() {
+  buildExport() {
     const spans = []
     const tracesToInclude = new Set()
+    const included = []
 
     for (const observation of this.observations.values()) {
       if (!observation.dirty || !observation.isReady()) continue
       tracesToInclude.add(observation.traceId || observation.id)
       spans.push(this.otlpSpan(observation))
+      included.push({ observation, revision: observation.revision })
     }
 
     for (const traceId of tracesToInclude) {
       const root = this.rootFor(traceId)
       if (root && !spans.some((span) => span.spanId === root.spanId)) {
         spans.unshift(this.otlpSpan(root))
+        if (root.dirty && root.isReady()) {
+          included.push({ observation: root, revision: root.revision })
+        }
       }
     }
 
     if (spans.length === 0) return undefined
 
     return {
-      resourceSpans: [
-        {
-          resource: {
-            attributes: [
-              { key: 'service.name', value: { stringValue: 'claude-code-telemetry-bridge' } },
-              ...Object.entries(this.resourceAttributes).map(([key, value]) => ({ key, value: otelValue(value) })).filter((attr) => attr.value),
+      included,
+      payload: {
+        resourceSpans: [
+          {
+            resource: {
+              attributes: [
+                { key: 'service.name', value: { stringValue: 'claude-code-telemetry-bridge' } },
+                ...Object.entries(this.resourceAttributes).map(([key, value]) => ({ key, value: otelValue(value) })).filter((attr) => attr.value),
+              ],
+            },
+            scopeSpans: [
+              {
+                scope: {
+                  name: 'rimthan-claude-code-telemetry-bridge',
+                  version: '1.0.0',
+                },
+                spans,
+              },
             ],
           },
-          scopeSpans: [
-            {
-              scope: {
-                name: 'rimthan-claude-code-telemetry-bridge',
-                version: '1.0.0',
-              },
-              spans,
-            },
-          ],
-        },
-      ],
+        ],
+      },
     }
   }
 
-  markExported() {
-    for (const observation of this.observations.values()) {
-      if (observation.isReady()) {
+  buildPayload() {
+    return this.buildExport()?.payload
+  }
+
+  markExported(included = []) {
+    for (const { observation, revision } of included) {
+      if (observation.revision === revision && observation.isReady()) {
         observation.dirty = false
         observation.exported = true
       }
@@ -332,8 +346,8 @@ class OtelLangfuse {
   }
 
   async flushAsync() {
-    const payload = this.buildPayload()
-    if (!payload) return
+    const exportData = this.buildExport()
+    if (!exportData) return
     if (!this.fetchImpl) throw new Error('No fetch implementation available for OTLP export')
 
     const response = await this.fetchImpl(this.endpoint, {
@@ -343,7 +357,7 @@ class OtelLangfuse {
         'Content-Type': 'application/json',
         'x-langfuse-ingestion-version': '4',
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(exportData.payload),
     })
 
     if (!response.ok) {
@@ -353,7 +367,7 @@ class OtelLangfuse {
       throw error
     }
 
-    this.markExported()
+    this.markExported(exportData.included)
   }
 
   async shutdownAsync() {

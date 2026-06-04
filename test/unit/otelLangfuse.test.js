@@ -128,4 +128,55 @@ describe('OtelLangfuse', () => {
     spans = JSON.parse(fetch.mock.calls[1][1].body).resourceSpans[0].scopeSpans[0].spans
     expect(spans.map((span) => span.name).sort()).toEqual(['Claude Code turn', 'LLM: claude-opus-4-8'])
   })
+
+  test('does not mark observations created during an in-flight flush as exported', async () => {
+    const resolvers = []
+    const fetch = jest.fn(() => new Promise((resolve) => resolvers.push(resolve)))
+    const client = new OtelLangfuse({
+      publicKey: 'pk-test',
+      secretKey: 'sk-test',
+      baseUrl: 'http://langfuse.local',
+      fetch,
+    })
+    const trace = client.trace({
+      name: 'Claude Code turn',
+      sessionId: 'session-1',
+      input: { prompt: 'hello' },
+    })
+
+    const firstFlush = client.flushAsync()
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    trace.update({ output: { assistantText: 'world' } })
+    const rawEvent = client.event({
+      name: 'Raw API request',
+      traceId: trace.id,
+      input: { body: '{"model":"claude"}' },
+    })
+    const generation = client.generation({
+      name: 'LLM: claude-opus-4-8',
+      traceId: trace.id,
+      model: 'claude-opus-4-8',
+      input: { prompt: 'hello' },
+      output: { assistantText: 'world' },
+    })
+
+    resolvers[0]({ ok: true, status: 200 })
+    await firstFlush
+
+    expect(trace.dirty).toBe(true)
+    expect(rawEvent.dirty).toBe(true)
+    expect(generation.dirty).toBe(true)
+
+    const secondFlush = client.flushAsync()
+    expect(fetch).toHaveBeenCalledTimes(2)
+    resolvers[1]({ ok: true, status: 200 })
+    await secondFlush
+
+    const spans = JSON.parse(fetch.mock.calls[1][1].body).resourceSpans[0].scopeSpans[0].spans
+    expect(spans.map((span) => span.name).sort()).toEqual(['Claude Code turn', 'LLM: claude-opus-4-8', 'Raw API request'])
+    expect(trace.dirty).toBe(false)
+    expect(rawEvent.dirty).toBe(false)
+    expect(generation.dirty).toBe(false)
+  })
 })
